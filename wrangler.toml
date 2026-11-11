@@ -1,0 +1,23 @@
+name = "asifa"
+main = "worker.js"
+compatibility_date = "2026-11-01"
+workers_dev = false
+
+# קבצי האתר (client/) והמיגרציות נכללים בוורקר כטקסט
+[[rules]]
+type = "Text"
+globs = ["**/*.html", "**/*.css", "**/client-*.js", "**/*.sql"]
+fallthrough = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "asifa"
+database_id = "22909c66-3a8f-4e47-9f82-7a94c0ede541"
+migrations_dir = "migrations"
+
+# נעילת הרשמה אוטומטית, צינתוק ל"לא קבעו" ותזכורות
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true

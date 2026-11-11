@@ -1,0 +1,40 @@
+/* ============================================================
+   print.css — הדפסות: פתקי פרסום, פתקי תור, לוח מלמד ורשימות
+   מוצג רק בזמן הדפסה; האתר עצמו מוסתר
+   ============================================================ */
+#print-area { display: none; }
+
+@media print {
+    @page { size: A4; margin: 10mm; }
+    body { background: #fff; }
+    #root, .toasts, .modal-back { display: none !important; }
+    #print-area { display: block; color: #000; font-family: 'Heebo', Arial, sans-serif; }
+}
+
+.p-sheet { page-break-after: always; break-after: page; }
+.p-sheet:last-child { page-break-after: auto; break-after: auto; }
+
+/* פתקים: 2 עמודות × 4 שורות לעמוד, עם קווי חיתוך */
+.p-notes { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: 66mm; }
+.p-note { border: 1px dashed #999; padding: 6mm 7mm; display: flex; flex-direction: column; justify-content: space-between; overflow: hidden; }
+.p-note .p-inst { font-size: 10pt; color: #444; display: flex; justify-content: space-between; gap: 4mm; }
+.p-note .p-title { font-size: 15pt; font-weight: 800; margin: 1mm 0; }
+.p-note .p-name { font-size: 12pt; font-weight: 600; }
+.p-note .p-big { font-size: 24pt; font-weight: 800; letter-spacing: .5px; direction: ltr; text-align: center; border: 2px solid #000; border-radius: 3mm; padding: 1mm 0; margin: 2mm 0; }
+.p-note .p-code { font-size: 11pt; }
+.p-note .p-code b { font-size: 14pt; }
+.p-note .p-time { font-size: 20pt; font-weight: 800; }
+.p-note .p-foot { font-size: 9pt; color: #444; }
+
+/* לוח מלמד ורשימות */
+.p-head { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #000; padding-bottom: 3mm; margin-bottom: 4mm; }
+.p-head h1 { font-size: 18pt; margin: 0; }
+.p-head .p-sub { font-size: 11pt; }
+.p-table { width: 100%; border-collapse: collapse; font-size: 11pt; }
+.p-table th { background: #eee; text-align: right; padding: 2mm 2.5mm; border: 1px solid #999; font-weight: 700; }
+.p-table td { padding: 2mm 2.5mm; border: 1px solid #999; vertical-align: top; }
+.p-table tr { break-inside: avoid; }
+.p-table .p-notes-col { width: 34%; }
+.p-table .p-free td { color: #777; }
+.p-table .p-break td { background: #f3f3f3; color: #777; text-align: center; }
+.p-small { font-size: 9pt; color: #555; }
