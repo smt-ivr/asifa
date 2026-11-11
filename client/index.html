@@ -10,6 +10,10 @@
     <link rel="stylesheet" href="/asifa/mobile.css" media="(max-width: 768px)">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
+    <!-- כניסה שמורה בזיכרון: מסך הכניסה לא מוצג בכלל (מונע הבהוב) -->
+    <script>
+        try { if (localStorage.getItem('asifa_token') && localStorage.getItem('asifa_user')) document.write('<style id="noFlickerStyle">#auth-overlay { display: none !important; }</style>'); } catch (e) {}
+    </script>
 </head>
 <body>
     <!-- מסך כניסה — העיצוב ב-login.css, ההתנהגות ב-client-login.js -->
@@ -34,7 +38,7 @@
             <section class="lg-form">
                 <div class="lg-mobile-logo"><img src="https://smt-tel-manager.netlify.app/smt.png" alt="" draggable="false"></div>
                 <h1 id="lgTitle">כניסה למערכת</h1>
-                <p id="authMessage" class="lg-status"><i class="fas fa-lock"></i>הזינו שם משתמש וסיסמה</p>
+                <p id="authMessage" class="lg-status"><i class="fas fa-spinner fa-spin"></i>בודק הרשאת IP...</p>
 
                 <form id="loginForm" autocomplete="on">
                     <label class="lg-label" for="usernameInput">שם משתמש</label>

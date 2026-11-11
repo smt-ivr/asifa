@@ -1,14 +1,19 @@
 // ============================================================
 //  client-login.js — מסך הכניסה
-//  הטופס פתוח מיד. ברקע: טוקן שמור (/auth/me), ואם אין — בדיקת IP מורשית.
-//  כניסה אוטומטית לפי IP קורית רק אם המשתמש עוד לא התחיל להקליד.
+//  כניסה שמורה -> האתר נפתח מיד (נבדק ברקע).
+//  אחרת: הטופס פתוח מיד, ובמקביל בדיקת IP מורשית (כניסה אוטומטית רק אם עוד לא הקלידו).
 // ============================================================
 
 const API = '/asifa/api';
 const TOKEN_KEY = 'asifa_token';
+const USER_KEY = 'asifa_user';
 
 export function clearSession() {
-    try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(USER_KEY); } catch (e) { /* ignore */ }
+}
+
+function saveSession(token, user) {
+    try { localStorage.setItem(TOKEN_KEY, token); localStorage.setItem(USER_KEY, JSON.stringify(user)); } catch (e) { /* ignore */ }
 }
 
 // timeoutMs — הבדיקות ברקע לא נתקעות לעולם
@@ -59,29 +64,37 @@ export async function setupLogin(onSuccess) {
     // הטופס פתוח מיד — לא מחכים לשום בדיקה
     let done = false;
     const finish = u => { if (done) return; done = true; onSuccess(u); };
-    enableForm('הזינו שם משתמש וסיסמה');
 
-    // ברקע: טוקן שמור, ואם אין — בדיקת כתובת IP מורשית (נכנסים אוטומטית רק אם עוד לא התחילו להקליד)
+    // כניסה שמורה בזיכרון — האתר נפתח מיד (מסך הכניסה לא מוצג), והכניסה נבדקת מול השרת ברקע.
+    // אם היא כבר לא תקפה, הקריאה הראשונה לשרת מחזירה 401 והאתר חוזר למסך הכניסה.
+    let token = null, saved = null;
+    try { token = localStorage.getItem(TOKEN_KEY); saved = JSON.parse(localStorage.getItem(USER_KEY) || 'null'); } catch (e) { /* ignore */ }
+    if (token && saved) {
+        finish(saved);
+        call('GET', '/auth/me', null, token, 8000).then(u => { try { localStorage.setItem(USER_KEY, JSON.stringify(u)); } catch (e) { /* ignore */ } }).catch(() => {});
+        return;
+    }
+
+    // אין כניסה שמורה: הטופס פתוח מיד, ובדיקת ה-IP רצה במקביל.
+    // כניסה אוטומטית לפי IP — רק אם עוד לא התחילו להקליד.
+    enableForm('בודק הרשאת IP...');
+    msg.innerHTML = '<i class="fas fa-spinner fa-spin"></i>בודק הרשאת IP...';
     const typing = () => user.value.trim() || pass.value || !btn.querySelector('.fa-arrow-left');
     (async () => {
-        let token = null;
-        try { token = localStorage.getItem(TOKEN_KEY); } catch (e) { /* ignore */ }
         if (token) {
-            msg.innerHTML = '<i class="fas fa-spinner fa-spin"></i>מתחבר...';
-            try {
-                return finish(await call('GET', '/auth/me', null, token, 8000));
-            } catch (e) {
-                if (e.status === 401) clearSession();
-                msg.innerHTML = '<i class="fas fa-lock"></i>הזינו שם משתמש וסיסמה';
-            }
+            try { return finish(await call('GET', '/auth/me', null, token, 8000)); }
+            catch (e) { if (e.status === 401) clearSession(); }
         }
         try {
             const r = await call('POST', '/auth/login', {}, null, 8000);
             if (r.authorized && !typing()) {
-                localStorage.setItem(TOKEN_KEY, r.token);
-                finish(r.user);
+                saveSession(r.token, r.user);
+                return finish(r.user);
             }
-        } catch (e) { /* הבדיקה האוטומטית לא חוסמת את הטופס */ }
+            if (!done) msg.innerHTML = '<i class="fas fa-lock"></i>כתובת ה-IP אינה מורשית — הזינו שם משתמש וסיסמה';
+        } catch (e) {
+            if (!done) msg.innerHTML = '<i class="fas fa-lock"></i>הזינו שם משתמש וסיסמה';
+        }
     })();
 
     // כניסה בשם משתמש וסיסמה
@@ -93,7 +106,7 @@ export async function setupLogin(onSuccess) {
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>מאמת...</span>';
         try {
             const r = await call('POST', '/auth/login', { username: user.value.trim(), password: pass.value });
-            localStorage.setItem(TOKEN_KEY, r.token);
+            saveSession(r.token, r.user);
             finish(r.user);
         } catch (er) {
             showError(er.message);
