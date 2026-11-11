@@ -14,6 +14,17 @@ import { readJson, str, int, badRequest, notFound, conflict, forbidden } from '.
 import { requireSuper, hashPassword } from './auth.js';
 import { getLocalTime } from './time.js';
 import { ensureTenantSchema, dropTenantTables, tables } from './tenant_schema.js';
+import { welcomeMail, preview, sendMail, validEmail, normalizeEmail, mailReady } from './mail.js';
+
+// שם משתמש: עברית או אנגלית, ספרות, רווח ו-. _ - @  (2–60 תווים, מתחיל באות או ספרה)
+const validUsername = u => /^[\p{L}\p{N}][\p{L}\p{N} ._@'-]{1,59}$/u.test(u);
+const USERNAME_MSG = 'שם משתמש: 2–60 תווים — אותיות בעברית או באנגלית, ספרות, רווח';
+function cleanEmail(v) {
+    const e = normalizeEmail(v);
+    if (!e) return null;
+    if (!validEmail(e)) throw badRequest('כתובת המייל אינה תקינה');
+    return e;
+}
 
 async function counts(env, t) {
     if (t.schema_version < 1) return { students: 0, classes: 0, meetings: 0 };
@@ -80,7 +91,7 @@ export async function deleteTenant(request, env, ctx, id) {
 }
 
 // ---------- הרשאות ----------
-const ruleShape = r => ({ id: r.id, tenant_id: r.tenant_id, rule_type: r.rule_type, username: r.username, ip: r.ip,
+const ruleShape = r => ({ id: r.id, tenant_id: r.tenant_id, rule_type: r.rule_type, username: r.username, ip: r.ip, email: r.email || null,
     description: r.description, active: !!r.active, last_used_at: r.last_used_at, created_at: r.created_at });
 
 const validIp = ip => /^[0-9a-fA-F:.]{3,45}$/.test(ip);
@@ -92,6 +103,10 @@ export async function listAccess(env, ctx, url) {
         ? await env.DB.prepare('SELECT * FROM access_rules WHERE tenant_id IS NULL ORDER BY rule_type, id').all()
         : await env.DB.prepare('SELECT * FROM access_rules WHERE tenant_id = ? ORDER BY rule_type, id').bind(int(scope) || 0).all();
     return results.map(ruleShape);
+}
+
+async function checkEmailUnique(env, email, exceptId = 0) {
+    if (email && await env.DB.prepare('SELECT id FROM access_rules WHERE email = ? AND id != ?').bind(email, exceptId).first()) throw conflict('כתובת המייל כבר שייכת למשתמש אחר');
 }
 
 async function checkUnique(env, type, value, exceptId = 0) {
@@ -114,13 +129,15 @@ export async function createAccess(request, env, ctx) {
     const now = getLocalTime();
     let r;
     if (type === 'user') {
-        const username = str(body.username, 60);
-        if (!/^[\w.@-]{3,60}$/.test(username)) throw badRequest('שם משתמש: לפחות 3 תווים, אותיות באנגלית / ספרות');
+        const username = str(body.username, 60).replace(/\s+/g, ' ');
+        if (!validUsername(username)) throw badRequest(USERNAME_MSG);
         checkPassword(body.password);
         await checkUnique(env, 'user', username);
+        const email = cleanEmail(body.email);
+        await checkEmailUnique(env, email);
         const h = await hashPassword(String(body.password));
-        r = await env.DB.prepare(`INSERT INTO access_rules (tenant_id, rule_type, username, password_hash, password_salt, description, active, created_at)
-            VALUES (?, 'user', ?, ?, ?, ?, 1, ?)`).bind(tenantId, username, h.hash, h.salt, description, now).run();
+        r = await env.DB.prepare(`INSERT INTO access_rules (tenant_id, rule_type, username, password_hash, password_salt, email, description, active, created_at)
+            VALUES (?, 'user', ?, ?, ?, ?, ?, 1, ?)`).bind(tenantId, username, h.hash, h.salt, email, description, now).run();
     } else {
         const ip = str(body.ip, 45);
         if (!validIp(ip)) throw badRequest('כתובת IP לא תקינה');
@@ -141,10 +158,12 @@ export async function updateAccess(request, env, ctx, id) {
     const description = body.description !== undefined ? (str(body.description, 100) || null) : r.description;
     const active = body.active !== undefined ? (body.active ? 1 : 0) : r.active;
     if (r.rule_type === 'user') {
-        const username = body.username !== undefined ? str(body.username, 60) : r.username;
-        if (!/^[\w.@-]{3,60}$/.test(username)) throw badRequest('שם משתמש לא תקין');
+        const username = body.username !== undefined ? str(body.username, 60).replace(/\s+/g, ' ') : r.username;
+        if (!validUsername(username)) throw badRequest(USERNAME_MSG);
         await checkUnique(env, 'user', username, id);
-        stmts.push(env.DB.prepare('UPDATE access_rules SET username = ?, description = ?, active = ? WHERE id = ?').bind(username, description, active, id));
+        const email = body.email !== undefined ? cleanEmail(body.email) : r.email;
+        await checkEmailUnique(env, email, id);
+        stmts.push(env.DB.prepare('UPDATE access_rules SET username = ?, email = ?, description = ?, active = ? WHERE id = ?').bind(username, email, description, active, id));
         if (body.password) {
             checkPassword(body.password);
             const h = await hashPassword(String(body.password));
@@ -183,4 +202,24 @@ export async function loginLog(env, ctx) {
     const { results } = await env.DB.prepare(`SELECT l.*, t.name tenant_name FROM login_log l LEFT JOIN tenants t ON t.id = l.tenant_id
         ORDER BY l.id DESC LIMIT 100`).all();
     return results;
+}
+
+// ---------- מייל פתיחת חשבון ----------
+//  POST /admin/access/:id/welcome  { password?, send: false }  — תצוגה מקדימה (לא נשלח)
+//                                  { password?, send: true }   — שליחה
+//  הסיסמה לא נשמרת במערכת, לכן נכללת במייל רק אם מוזנת עכשיו (בדרך כלל מיד ביצירת המשתמש)
+export async function welcomeEmail(request, env, ctx, id) {
+    requireSuper(ctx);
+    const r = await env.DB.prepare("SELECT * FROM access_rules WHERE id = ? AND rule_type = 'user'").bind(id).first();
+    if (!r) throw notFound('המשתמש לא נמצא');
+    const body = await readJson(request);
+    const email = body.to ? cleanEmail(body.to) : r.email;
+    if (!email) throw badRequest('למשתמש אין כתובת מייל. הוסיפו אותה בעריכת המשתמש');
+    const tenant = r.tenant_id ? await env.DB.prepare('SELECT name FROM tenants WHERE id = ?').bind(r.tenant_id).first() : null;
+    const m = welcomeMail(env, {
+        tenantName: tenant ? tenant.name : null, displayName: r.description, username: r.username,
+        password: body.password ? String(body.password).slice(0, 100) : null, email, google: !!env.GOOGLE_CLIENT_ID && email === r.email
+    });
+    if (!body.send) return { ...preview(m), from: env.MAIL_FROM || null, mail_ready: mailReady(env) };
+    return sendMail(env, m);
 }

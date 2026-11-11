@@ -88,12 +88,14 @@ async function renderAccess(el, tenantId) {
     const users = rules.filter(r => r.rule_type === 'user'), ips = rules.filter(r => r.rule_type === 'ip');
 
     const table = (items, kind) => items.length ? `<div class="table-container"><table class="modern-table">
-        <thead><tr><th>${kind === 'user' ? 'שם משתמש' : 'כתובת IP'}</th><th>תיאור</th><th>מצב</th><th>שימוש אחרון</th><th></th></tr></thead>
+        <thead><tr><th>${kind === 'user' ? 'שם משתמש' : 'כתובת IP'}</th>${kind === 'user' ? '<th>מייל</th>' : ''}<th>תיאור</th><th>מצב</th><th>שימוש אחרון</th><th></th></tr></thead>
         <tbody>${items.map(r => `<tr data-id="${r.id}">
-            <td><b class="ltr" style="color:var(--text-strong)">${esc(kind === 'user' ? r.username : r.ip)}</b></td><td>${esc(r.description || '')}</td>
+            <td><b style="color:var(--text-strong)" dir="auto">${esc(kind === 'user' ? r.username : r.ip)}</b></td>
+            ${kind === 'user' ? `<td>${r.email ? `<span class="ltr">${esc(r.email)}</span> <span class="badge badge-primary" title="אפשר להיכנס עם Google">G</span>` : '<span class="text-muted">—</span>'}</td>` : ''}
+            <td>${esc(r.description || '')}</td>
             <td>${r.active ? '<span class="badge badge-success">פעיל</span>' : '<span class="badge badge-danger">מושבת</span>'}</td>
             <td class="num text-muted">${esc(r.last_used_at || '—')}</td>
-            <td class="td-actions"><button class="icon-btn" data-edit title="עריכה"><i class="fas fa-pen"></i></button><button class="icon-btn danger" data-del title="מחיקה"><i class="fas fa-trash"></i></button></td></tr>`).join('')}</tbody></table></div>`
+            <td class="td-actions">${kind === 'user' && r.email ? '<button class="icon-btn" data-mail title="מייל פתיחת חשבון"><i class="fas fa-envelope"></i></button>' : ''}<button class="icon-btn" data-edit title="עריכה"><i class="fas fa-pen"></i></button><button class="icon-btn danger" data-del title="מחיקה"><i class="fas fa-trash"></i></button></td></tr>`).join('')}</tbody></table></div>`
         : `<p class="text-muted" style="padding:6px 16px 14px">${kind === 'user' ? 'אין משתמשים' : 'אין כתובות IP מורשות'}</p>`;
 
     el.innerHTML = `${isSuper ? tabs('super') : '<a class="back-link" href="#admin"><i class="fas fa-arrow-right"></i> כל המוסדות</a>'}
@@ -112,11 +114,16 @@ async function renderAccess(el, tenantId) {
     $('#addUser', el).onclick = () => modal({
         title: 'משתמש חדש', icon: 'fa-user',
         body: `<form class="form-grid">
-            <label class="field"><span>שם משתמש</span><input class="input ltr-input" name="username" required autocomplete="off"><small>אותיות באנגלית / ספרות</small></label>
+            <label class="field"><span>שם משתמש</span><input class="input" name="username" required autocomplete="off" dir="auto"><small>בעברית או באנגלית</small></label>
             <label class="field"><span>סיסמה</span><input class="input ltr-input" name="password" required autocomplete="new-password"><small>לפחות 6 תווים</small></label>
-            <label class="field full"><span>תיאור</span><input class="input" name="description" placeholder="מזכירות / מנהל"></label></form>`,
+            <label class="field"><span>מייל</span><input class="input ltr-input" name="email" type="email" placeholder="name@gmail.com"><small>לא חובה · לשליחת פרטי הכניסה ולכניסה עם Google</small></label>
+            <label class="field"><span>שם / תיאור</span><input class="input" name="description" placeholder="ר׳ משה כהן — מזכירות"></label></form>`,
         buttons: [{ label: 'שמירה', cls: 'btn-primary', icon: 'fa-save', action: async m => {
-            await post('/admin/access', { ...formData($('form', m)), rule_type: 'user', tenant_id: scope }); ok('המשתמש נוסף'); reload();
+            const f = formData($('form', m));
+            const r = await post('/admin/access', { ...f, rule_type: 'user', tenant_id: scope });
+            ok('המשתמש נוסף');
+            reload();
+            if (r.email) setTimeout(() => welcomeDialog(r, f.password), 50);
         } }, { label: 'ביטול' }]
     });
     $('#addIp', el).onclick = () => modal({
@@ -136,8 +143,9 @@ async function renderAccess(el, tenantId) {
             title: r.rule_type === 'user' ? r.username : r.ip, icon: 'fa-key',
             body: `<form class="form-grid">
                 ${r.rule_type === 'user'
-                    ? `<label class="field"><span>שם משתמש</span><input class="input ltr-input" name="username" value="${esc(r.username)}"></label>
-                       <label class="field"><span>סיסמה חדשה</span><input class="input ltr-input" name="password" autocomplete="new-password" placeholder="ריק = ללא שינוי"></label>`
+                    ? `<label class="field"><span>שם משתמש</span><input class="input" name="username" dir="auto" value="${esc(r.username)}"></label>
+                       <label class="field"><span>סיסמה חדשה</span><input class="input ltr-input" name="password" autocomplete="new-password" placeholder="ריק = ללא שינוי"></label>
+                       <label class="field full"><span>מייל</span><input class="input ltr-input" name="email" type="email" value="${esc(r.email || '')}"><small>לשליחת פרטי הכניסה ולכניסה עם Google</small></label>`
                     : `<label class="field full"><span>כתובת IP</span><input class="input ltr-input" name="ip" value="${esc(r.ip)}"></label>`}
                 <label class="field full"><span>תיאור</span><input class="input" name="description" value="${esc(r.description || '')}"></label>
                 <label class="check full"><input type="checkbox" name="active" ${r.active ? 'checked' : ''}> פעיל</label></form>`,
@@ -148,6 +156,7 @@ async function renderAccess(el, tenantId) {
             } }, { label: 'ביטול' }]
         });
     });
+    $$('[data-mail]', el).forEach(b => b.onclick = () => welcomeDialog(rules.find(x => x.id === +b.closest('tr').dataset.id), ''));
     $$('[data-del]', el).forEach(b => b.onclick = async () => {
         const r = rules.find(x => x.id === +b.closest('tr').dataset.id);
         if (!await confirmDialog('מחיקת הרשאה', `למחוק את ${esc(r.username || r.ip)}?`, { okLabel: 'מחיקה', danger: true })) return;
@@ -157,6 +166,39 @@ async function renderAccess(el, tenantId) {
     if (enter) enter.onclick = () => enterTenant({ id: tenant.id, name: tenant.name });
 }
 
+// ---------- מייל פתיחת חשבון: תצוגה מקדימה ואז שליחה ----------
+function welcomeDialog(rule, password) {
+    if (!rule.email) return fail(new Error('למשתמש אין כתובת מייל. הוסיפו אותה בעריכת המשתמש'));
+    const { el: m } = modal({
+        title: 'מייל פתיחת חשבון', icon: 'fa-envelope', wide: true,
+        body: `<div class="form-grid" style="margin-bottom:12px">
+                <label class="field"><span>נשלח אל</span><input class="input ltr-input" id="wTo" value="${esc(rule.email)}"></label>
+                <label class="field"><span>סיסמה לכלול במייל</span><input class="input ltr-input" id="wPass" value="${esc(password || '')}" placeholder="ריק = בלי סיסמה במייל">
+                    <small>הסיסמאות לא נשמרות במערכת — אם לא תוזן, המייל יגיד שהסיסמה תימסר בנפרד</small></label></div>
+            <div class="mail-meta" id="wMeta"></div>
+            <iframe id="wFrame" class="mail-frame" title="תצוגה מקדימה"></iframe>
+            <div id="wWarn"></div>`,
+        buttons: [
+            { label: 'שליחת המייל', cls: 'btn-primary', icon: 'fa-paper-plane', action: async mm => {
+                const r = await post(`/admin/access/${rule.id}/welcome`, { send: true, to: $('#wTo', mm).value.trim(), password: $('#wPass', mm).value });
+                ok(`המייל נשלח ל-${r.to}`);
+            } },
+            { label: 'סגירה בלי לשלוח' }
+        ]
+    });
+    let timer = null;
+    const load = async () => {
+        try {
+            const p = await post(`/admin/access/${rule.id}/welcome`, { send: false, to: $('#wTo', m).value.trim(), password: $('#wPass', m).value });
+            $('#wMeta', m).innerHTML = `<div><span>מאת:</span> <b class="ltr">${esc(p.from || '')}</b></div><div><span>אל:</span> <b class="ltr">${esc(p.to)}</b></div><div><span>נושא:</span> <b>${esc(p.subject)}</b></div>`;
+            $('#wFrame', m).srcdoc = p.html;
+            $('#wWarn', m).innerHTML = p.mail_ready ? '' : '<div class="notice warning" style="margin:10px 0 0"><i class="fas fa-exclamation-triangle"></i><span>שליחת מיילים עדיין לא הוגדרה (חסר מפתח Resend בהגדרות הוורקר) — אפשר לראות את המייל, אבל לא לשלוח.</span></div>';
+        } catch (e) { fail(e); }
+    };
+    ['#wTo', '#wPass'].forEach(id => { $(id, m).oninput = () => { clearTimeout(timer); timer = setTimeout(load, 400); }; });
+    load();
+}
+
 async function renderLog(el) {
     const list = await get('/admin/login-log');
     el.innerHTML = `${tabs('log')}
@@ -164,7 +206,7 @@ async function renderLog(el) {
             <thead><tr><th>מתי (UTC)</th><th>תוצאה</th><th>שיטה</th><th>משתמש</th><th>מוסד</th><th>IP</th></tr></thead>
             <tbody>${list.map(l => `<tr><td class="num">${esc(l.created_at)}</td>
                 <td>${l.success ? '<span class="badge badge-success">הצליח</span>' : '<span class="badge badge-danger">נכשל</span>'}</td>
-                <td>${l.method === 'ip' ? 'IP' : 'סיסמה'}</td><td class="ltr">${esc(l.username || '')}</td><td>${esc(l.tenant_name || (l.success && !l.tenant_id ? 'מנהל-על' : ''))}</td>
+                <td>${{ ip: 'IP', google: 'Google', user: 'סיסמה' }[l.method] || esc(l.method)}</td><td dir="auto">${esc(l.username || '')}</td><td>${esc(l.tenant_name || (l.success && !l.tenant_id ? 'מנהל-על' : ''))}</td>
                 <td class="ltr num">${esc(l.ip || '')}</td></tr>`).join('')}</tbody></table></div>` : emptyState('fa-history', 'אין כניסות')}</div>`;
 }
 

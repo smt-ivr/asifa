@@ -3,8 +3,12 @@
 //  (טבלאות של כל מוסד — ב-tenant_schema.js)
 // ============================================================
 import m0001 from './migrations/0001_platform.sql';
+import m0002 from './migrations/0002_access_email.sql';
 
-const MIGRATIONS = [{ version: 1, name: '0001_platform', sql: m0001 }];
+const MIGRATIONS = [
+    { version: 1, name: '0001_platform', sql: m0001 },
+    { version: 2, name: '0002_access_email', sql: m0002 }
+];
 let ready = null;
 
 const statements = sql => sql.split('\n').filter(l => !l.trim().startsWith('--')).join('\n')

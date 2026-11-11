@@ -14,5 +14,12 @@ binding = "DB"
 database_name = "asifa"
 database_id = "22909c66-3a8f-4e47-9f82-7a94c0ede541"
 
+# כניסה עם Google (מזהה ציבורי, מורשה לדומיין smti.uk) ושולח המיילים.
+# המפתח של Resend נשמר כסוד בשם RESEND_API_KEY (לא בקובץ הזה).
+[vars]
+GOOGLE_CLIENT_ID = "89500817024-tbvsuu4dci6bqh173l65ua9lc65pe24p.apps.googleusercontent.com"
+MAIL_FROM = "אסיפת הורים <asifa@smti.uk>"
+SITE_URL = "https://smti.uk/asifa/"
+
 [observability]
 enabled = true

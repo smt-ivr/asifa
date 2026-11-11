@@ -97,6 +97,8 @@ export async function setupLogin(onSuccess) {
         }
     })();
 
+    setupGoogle(r => { saveSession(r.token, r.user); finish(r.user); }, showError);
+
     // כניסה בשם משתמש וסיסמה
     $('loginForm').onsubmit = async e => {
         e.preventDefault();
@@ -115,4 +117,34 @@ export async function setupLogin(onSuccess) {
             pass.select();
         }
     };
+}
+
+// ---------- כניסה עם Google ----------
+// הכפתור הרשמי של Google; אחרי בחירת חשבון השרת בודק שיש משתמש פעיל עם אותו מייל
+async function setupGoogle(onLogin, showError) {
+    let clientId;
+    try { clientId = (await call('GET', '/auth/options', null, null, 8000)).google_client_id; } catch (e) { return; }
+    if (!clientId) return;
+    await new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://accounts.google.com/gsi/client?hl=he';
+        s.async = true;
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+    }).catch(() => null);
+    if (!window.google || !google.accounts || !google.accounts.id) return;
+    google.accounts.id.initialize({
+        client_id: clientId,
+        ux_mode: 'popup',
+        callback: async resp => {
+            document.getElementById('loginError').classList.add('hidden');
+            try { onLogin(await call('POST', '/auth/google', { credential: resp.credential })); }
+            catch (e) { showError(e.message); }
+        }
+    });
+    const slot = document.getElementById('googleSlot');
+    google.accounts.id.renderButton(slot, { theme: 'outline', size: 'large', text: 'continue_with', shape: 'pill', locale: 'he', width: Math.min(360, slot.clientWidth || 320) });
+    slot.classList.remove('hidden');
+    document.getElementById('googleOr').classList.remove('hidden');
 }

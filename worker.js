@@ -18,8 +18,8 @@ import clientAdminJs from './client/client-admin.js';
 
 import { CORS, json, errorResponse, notFound } from './http.js';
 import { ensureSchema } from './migrate.js';
-import { login, logout, authenticate, requireSuper } from './auth.js';
-import { listTenants, createTenant, updateTenant, deleteTenant, listAccess, createAccess, updateAccess, deleteAccess, loginLog } from './admin.js';
+import { login, loginGoogle, loginOptions, logout, authenticate, requireSuper } from './auth.js';
+import { listTenants, createTenant, updateTenant, deleteTenant, listAccess, createAccess, updateAccess, deleteAccess, loginLog, welcomeEmail } from './admin.js';
 import { listClasses, createClass, updateClass, deleteClass } from './classes.js';
 import { listStudents, createStudent, updateStudent, deleteStudent, deleteStudents, importStudents } from './students.js';
 import { listMeetings, createMeeting, meetingDetails, updateMeeting, deleteMeeting } from './meetings.js';
@@ -56,6 +56,7 @@ const ROUTES = [
     ['POST', /^\/admin\/access$/, (r, e, c) => createAccess(r, e, c)],
     ['PUT', /^\/admin\/access\/(\d+)$/, (r, e, c, p) => updateAccess(r, e, c, +p[1])],
     ['DELETE', /^\/admin\/access\/(\d+)$/, (r, e, c, p) => deleteAccess(e, c, +p[1])],
+    ['POST', /^\/admin\/access\/(\d+)\/welcome$/, (r, e, c, p) => welcomeEmail(r, e, c, +p[1])],
     ['GET', /^\/admin\/login-log$/, (r, e, c) => loginLog(e, c)],
     ['GET', /^\/admin\/my-ip$/, (r, e, c) => { requireSuper(c); return { ip: r.headers.get('cf-connecting-ip') || '' }; }],
 
@@ -85,6 +86,8 @@ async function handleApi(request, env, path, url) {
     await ensureSchema(env);
     if (path === '' || path === '/') return json({ name: 'asifa', version: API_VERSION });
     if (path === '/auth/login' && request.method === 'POST') return json(await login(request, env));
+    if (path === '/auth/google' && request.method === 'POST') return json(await loginGoogle(request, env));
+    if (path === '/auth/options' && request.method === 'GET') return json(loginOptions(env));
     for (const [method, re, handler] of ROUTES) {
         if (method !== request.method) continue;
         const p = re.exec(path);

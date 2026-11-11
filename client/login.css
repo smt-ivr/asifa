@@ -146,3 +146,8 @@
 
 .lg-field + .lg-label { margin-top: 16px; display: block; }
 .lg-label { display: block; }
+
+/* כניסה עם Google */
+.lg-or { display: flex; align-items: center; gap: 12px; margin: 18px 0 14px; color: #94a3b8; font-size: .82rem; }
+.lg-or::before, .lg-or::after { content: ''; flex: 1; height: 1px; background: #e2e8f0; }
+.google-slot { display: flex; justify-content: center; min-height: 44px; }

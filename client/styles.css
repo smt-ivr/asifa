@@ -202,3 +202,8 @@ textarea.input { resize: vertical; min-height: 70px; }
 .ntf.error { --c: #dc2626; }
 .ntf.warning { --c: #d97706; }
 .ntf.out { opacity: 0; transition: opacity .2s; }
+
+/* תצוגה מקדימה של מייל */
+.mail-meta { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 12px; background: #f8fafc; border: 1px solid var(--border-color); border-radius: 8px 8px 0 0; font-size: .85rem; }
+.mail-meta span { color: var(--text-muted); }
+.mail-frame { width: 100%; height: 520px; border: 1px solid var(--border-color); border-top: 0; border-radius: 0 0 8px 8px; background: #f1f5f9; display: block; }

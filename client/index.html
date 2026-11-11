@@ -44,7 +44,7 @@
                     <label class="lg-label" for="usernameInput">שם משתמש</label>
                     <div class="lg-field">
                         <i class="fas fa-user lg-field-ico"></i>
-                        <input type="text" id="usernameInput" class="lg-input" autocomplete="username" spellcheck="false" dir="ltr">
+                        <input type="text" id="usernameInput" class="lg-input" autocomplete="username" spellcheck="false" dir="auto">
                     </div>
                     <label class="lg-label" for="passwordInput">סיסמה</label>
                     <div class="lg-field">
@@ -55,6 +55,9 @@
                     <div class="lg-caps hidden" id="lgCaps"><i class="fas fa-arrow-alt-circle-up"></i> Caps Lock פעיל</div>
                     <button id="loginBtn" class="lg-btn" type="submit"><span>כניסה</span><i class="fas fa-arrow-left"></i></button>
                 </form>
+
+                <div class="lg-or hidden" id="googleOr"><span>או</span></div>
+                <div id="googleSlot" class="google-slot hidden"></div>
 
                 <div id="loginError" class="lg-error hidden" role="alert"><i class="fas fa-exclamation-circle"></i> <span id="loginErrorText"></span></div>
                 <div class="lg-secure"><i class="fas fa-shield-alt"></i> החיבור מאובטח · כל ניסיון כניסה נרשם במערכת</div>
