@@ -15,6 +15,8 @@ import clientStudentsJs from './client/client-students.js';
 import clientClassesJs from './client/client-classes.js';
 import clientMeetingsJs from './client/client-meetings.js';
 import clientAdminJs from './client/client-admin.js';
+import clientBookingsJs from './client/client-bookings.js';
+import clientPhoneJs from './client/client-phone.js';
 
 import { CORS, json, errorResponse, notFound } from './http.js';
 import { ensureSchema } from './migrate.js';
@@ -25,6 +27,8 @@ import { listClasses, createClass, updateClass, deleteClass } from './classes.js
 import { listStudents, createStudent, updateStudent, deleteStudent, deleteStudents, importStudents } from './students.js';
 import { listMeetings, createMeeting, meetingDetails, updateMeeting, deleteMeeting } from './meetings.js';
 import { dashboard } from './dashboard.js';
+import { getPhoneSettings, updatePhoneSettings, meetingBookings, deleteBooking, updateAbsence, callLog } from './phone.js';
+import { handleYemot } from './yemot.js';
 
 const API_VERSION = '2.0.0';
 const BASE = '/asifa';
@@ -41,7 +45,9 @@ const FILES = {
     '/client-students.js': [clientStudentsJs, JS],
     '/client-classes.js': [clientClassesJs, JS],
     '/client-meetings.js': [clientMeetingsJs, JS],
-    '/client-admin.js': [clientAdminJs, JS]
+    '/client-admin.js': [clientAdminJs, JS],
+    '/client-bookings.js': [clientBookingsJs, JS],
+    '/client-phone.js': [clientPhoneJs, JS]
 };
 
 // [שיטה, נתיב, פעולה(request, env, ctx, params, url)] — כולם דורשים כניסה
@@ -83,7 +89,14 @@ const ROUTES = [
     ['POST', /^\/meetings$/, (r, e, c) => createMeeting(r, e, c)],
     ['GET', /^\/meetings\/(\d+)$/, (r, e, c, p) => meetingDetails(e, c, +p[1])],
     ['PUT', /^\/meetings\/(\d+)$/, (r, e, c, p) => updateMeeting(r, e, c, +p[1])],
-    ['DELETE', /^\/meetings\/(\d+)$/, (r, e, c, p) => deleteMeeting(e, c, +p[1])]
+    ['DELETE', /^\/meetings\/(\d+)$/, (r, e, c, p) => deleteMeeting(e, c, +p[1])],
+    ['GET', /^\/meetings\/(\d+)\/bookings$/, (r, e, c, p) => meetingBookings(e, c, +p[1])],
+    ['DELETE', /^\/meetings\/(\d+)\/bookings\/(\d+)$/, (r, e, c, p) => deleteBooking(e, c, +p[1], +p[2])],
+    ['PUT', /^\/meetings\/(\d+)\/absences\/(\d+)$/, (r, e, c, p) => updateAbsence(r, e, c, +p[1], +p[2])],
+
+    ['GET', /^\/phone-settings$/, (r, e, c) => getPhoneSettings(e, c)],
+    ['PUT', /^\/phone-settings$/, (r, e, c) => updatePhoneSettings(r, e, c)],
+    ['GET', /^\/calls$/, (r, e, c) => callLog(e, c)]
 ];
 
 async function handleApi(request, env, path, url) {
@@ -110,6 +123,24 @@ export default {
         if (path === BASE) return Response.redirect(`${url.origin}${BASE}/`, 301);
         if (!path.startsWith(`${BASE}/`)) return new Response('Not found', { status: 404 });
         path = path.slice(BASE.length);
+
+        // שלוחת ימות המשיח: /asifa/api/yemot/<מזהה מוסד>  (טקסט, בלי כניסה)
+        const ym = /^\/api\/yemot(?:\/(\d+))?\/?$/.exec(path);
+        if (ym) {
+            try {
+                await ensureSchema(env);
+                if (request.method === 'POST') {
+                    try {
+                        const form = await request.formData();
+                        for (const [k, v] of form.entries()) if (!url.searchParams.has(k)) url.searchParams.append(k, String(v));
+                    } catch (e) { /* גוף ריק */ }
+                }
+                return await handleYemot(url, env, ym[1]);
+            } catch (e) {
+                console.error('yemot', e && e.stack || e);
+                return new Response('id_list_message=t-אירעה תקלה זמנית במערכת נסו שוב מאוחר יותר&go_to_folder=hangup', { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
+            }
+        }
 
         if (path === '/api' || path.startsWith('/api/')) {
             try {

@@ -46,7 +46,7 @@ function who(rule, tenant) {
         email: rule.email || null,
         name: rule.rule_type === 'user' ? (rule.description || rule.username) : (rule.description || 'כניסה לפי IP'),
         username: rule.username || null,
-        tenant: tenant ? { id: tenant.id, name: tenant.name } : null
+        tenant: tenant ? { id: tenant.id, name: tenant.name, phone_managed_by: tenant.phone_managed_by || 'super' } : null
     };
 }
 

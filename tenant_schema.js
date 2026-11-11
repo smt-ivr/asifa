@@ -21,7 +21,11 @@ export const tables = tenantId => {
         students: `${p}students`,
         phones: `${p}student_phones`,
         meetings: `${p}meetings`,
-        meetingClasses: `${p}meeting_classes`
+        meetingClasses: `${p}meeting_classes`,
+        bookings: `${p}bookings`,
+        slots: `${p}booking_slots`,
+        absences: `${p}absences`,
+        calls: `${p}call_log`
     };
 };
 
@@ -73,6 +77,53 @@ const VERSIONS = [
             PRIMARY KEY (meeting_id, class_id)
         )`
     ]
+    ,
+    // גרסה 2 — קו טלפוני: מצב הרשמה לאסיפה, תורים, פרקי זמן תפוסים, "לא נוכל להגיע", יומן שיחות
+    t => [
+        `ALTER TABLE ${t.meetings} ADD COLUMN phone_status TEXT NOT NULL DEFAULT 'closed'`,
+        `ALTER TABLE ${t.meetings} ADD COLUMN booking_closes_at TEXT`,
+        `CREATE TABLE IF NOT EXISTS ${t.bookings} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id INTEGER NOT NULL,
+            class_id INTEGER NOT NULL,
+            student_id INTEGER NOT NULL,
+            start_min INTEGER NOT NULL,
+            duration INTEGER NOT NULL,
+            source TEXT NOT NULL,
+            phone TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (meeting_id, student_id)
+        )`,
+        `CREATE TABLE IF NOT EXISTS ${t.slots} (
+            meeting_id INTEGER NOT NULL,
+            class_id INTEGER NOT NULL,
+            slot_min INTEGER NOT NULL,
+            booking_id INTEGER NOT NULL,
+            PRIMARY KEY (meeting_id, class_id, slot_min)
+        )`,
+        `CREATE INDEX IF NOT EXISTS ${t.slots}_booking ON ${t.slots}(booking_id)`,
+        `CREATE TABLE IF NOT EXISTS ${t.absences} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            meeting_id INTEGER NOT NULL,
+            student_id INTEGER NOT NULL,
+            phone TEXT,
+            source TEXT NOT NULL,
+            handled INTEGER NOT NULL DEFAULT 0,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (meeting_id, student_id)
+        )`,
+        `CREATE TABLE IF NOT EXISTS ${t.calls} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone TEXT,
+            call_id TEXT,
+            action TEXT NOT NULL,
+            student_id INTEGER,
+            details TEXT,
+            created_at TEXT NOT NULL
+        )`
+    ]
 ];
 
 export const LATEST = VERSIONS.length;
@@ -95,7 +146,7 @@ export async function dropTenantTables(env, tenantId) {
     const { results } = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE ?").bind(`${p}%`).all();
     const names = results.map(r => r.name).filter(n => n.startsWith(p) && /^t\d+_[a-z_]+$/.test(n));
     // סדר: קודם טבלאות שתלויות באחרות
-    const order = ['meeting_classes', 'meetings', 'student_phones', 'students', 'classes'];
+    const order = ['booking_slots', 'bookings', 'absences', 'call_log', 'meeting_classes', 'meetings', 'student_phones', 'students', 'classes'];
     names.sort((a, b) => order.indexOf(a.slice(p.length)) - order.indexOf(b.slice(p.length)));
     if (names.length) await env.DB.batch(names.map(n => env.DB.prepare(`DROP TABLE IF EXISTS ${n}`)));
 }

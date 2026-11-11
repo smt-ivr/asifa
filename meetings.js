@@ -8,7 +8,7 @@
 //                                  classes מחליף את רשימת הכיתות המשתתפות
 //  DELETE /meetings/:id
 // ============================================================
-import { readJson, str, int, badRequest, notFound } from './http.js';
+import { readJson, str, int, badRequest, notFound, conflict } from './http.js';
 import { requireTenant } from './auth.js';
 import { getLocalTime, validDate, validTime, toMinutes } from './time.js';
 import { tables } from './tenant_schema.js';
@@ -32,7 +32,8 @@ async function getMeeting(env, t, id) {
 export async function listMeetings(env, ctx) {
     requireTenant(ctx);
     const t = tables(ctx.tenant.id);
-    const { results } = await env.DB.prepare(`SELECT m.*, (SELECT COUNT(*) FROM ${t.meetingClasses} mc WHERE mc.meeting_id = m.id) classes_count
+    const { results } = await env.DB.prepare(`SELECT m.*, (SELECT COUNT(*) FROM ${t.meetingClasses} mc WHERE mc.meeting_id = m.id) classes_count,
+            (SELECT COUNT(*) FROM ${t.bookings} b WHERE b.meeting_id = m.id) bookings_count
         FROM ${t.meetings} m ORDER BY COALESCE(m.meeting_date, '9999') DESC, m.id DESC`).all();
     return results.map(shape);
 }
@@ -70,8 +71,16 @@ export async function updateMeeting(request, env, ctx, id) {
     let date = b.meeting_date !== undefined ? (str(b.meeting_date, 10) || null) : m.meeting_date;
     if (date && !validDate(date)) throw badRequest('תאריך האסיפה לא תקין');
     const durations = b.durations !== undefined ? cleanDurations(b.durations) : parse(m.durations);
-    const stmts = [env.DB.prepare(`UPDATE ${t.meetings} SET name = ?, meeting_date = ?, durations = ?, notes = ?, updated_at = ? WHERE id = ?`)
-        .bind(name, date, JSON.stringify(durations), b.notes !== undefined ? (str(b.notes, 1000) || null) : m.notes, getLocalTime(), id)];
+    // מצב ההרשמה בטלפון: closed / open / locked (שמיעה ו"לא נוכל להגיע" בלבד)
+    const phoneStatus = ['closed', 'open', 'locked'].includes(b.phone_status) ? b.phone_status : m.phone_status;
+    if (phoneStatus !== 'closed') {
+        const other = await env.DB.prepare(`SELECT name FROM ${t.meetings} WHERE id != ? AND phone_status != 'closed'`).bind(id).first();
+        if (other) throw conflict(`האסיפה "${other.name}" כבר פעילה בטלפון. סגרו אותה קודם`);
+    }
+    let closes = b.booking_closes_at !== undefined ? (str(b.booking_closes_at, 16).replace('T', ' ') || null) : m.booking_closes_at;
+    if (closes && !/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(closes)) throw badRequest('מועד סגירת ההרשמה לא תקין');
+    const stmts = [env.DB.prepare(`UPDATE ${t.meetings} SET name = ?, meeting_date = ?, durations = ?, notes = ?, phone_status = ?, booking_closes_at = ?, updated_at = ? WHERE id = ?`)
+        .bind(name, date, JSON.stringify(durations), b.notes !== undefined ? (str(b.notes, 1000) || null) : m.notes, phoneStatus, closes, getLocalTime(), id)];
 
     if (Array.isArray(b.classes)) {
         const { results: all } = await env.DB.prepare(`SELECT id, name FROM ${t.classes}`).all();
@@ -86,9 +95,15 @@ export async function updateMeeting(request, env, ctx, id) {
             if (!validTime(c.start_time) || !validTime(c.end_time)) throw badRequest(`יש להזין שעת התחלה וסיום ל${label}`);
             if (toMinutes(c.end_time) <= toMinutes(c.start_time)) throw badRequest(`בכיתה ${label} שעת הסיום חייבת להיות אחרי שעת ההתחלה`);
             const d = cleanDurations(c.durations, label);
+            const booked = await env.DB.prepare(`SELECT COUNT(*) n FROM ${t.bookings} WHERE meeting_id = ? AND class_id = ? AND (start_min < ? OR start_min + duration > ?)`)
+                .bind(id, classId, toMinutes(c.start_time), toMinutes(c.end_time)).first();
+            if (booked.n) throw conflict(`בכיתה ${label} יש ${booked.n} תורים מחוץ לשעות החדשות. בטלו אותם קודם`);
             stmts.push(env.DB.prepare(`INSERT INTO ${t.meetingClasses} (meeting_id, class_id, start_time, end_time, durations) VALUES (?, ?, ?, ?, ?)`)
                 .bind(id, classId, c.start_time, c.end_time, JSON.stringify(d)));
         }
+        const { results: withBookings } = await env.DB.prepare(`SELECT DISTINCT class_id FROM ${t.bookings} WHERE meeting_id = ?`).bind(id).all();
+        const dropped = withBookings.find(x => !seen.has(x.class_id));
+        if (dropped) throw conflict(`אי אפשר להוציא מהאסיפה את ${names.get(dropped.class_id) || 'הכיתה'} — כבר נקבעו בה תורים`);
     }
     await env.DB.batch(stmts);
     return meetingDetails(env, ctx, id);
@@ -99,6 +114,9 @@ export async function deleteMeeting(env, ctx, id) {
     const t = tables(ctx.tenant.id);
     await getMeeting(env, t, id);
     await env.DB.batch([
+        env.DB.prepare(`DELETE FROM ${t.slots} WHERE meeting_id = ?`).bind(id),
+        env.DB.prepare(`DELETE FROM ${t.bookings} WHERE meeting_id = ?`).bind(id),
+        env.DB.prepare(`DELETE FROM ${t.absences} WHERE meeting_id = ?`).bind(id),
         env.DB.prepare(`DELETE FROM ${t.meetingClasses} WHERE meeting_id = ?`).bind(id),
         env.DB.prepare(`DELETE FROM ${t.meetings} WHERE id = ?`).bind(id)
     ]);

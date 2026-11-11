@@ -51,7 +51,12 @@ function chips(name, options, selected) {
 }
 
 function bindChips(root) {
-    root.addEventListener('change', e => { if (e.target.closest('.chip')) e.target.closest('.chip').classList.toggle('on', e.target.checked); });
+    root.addEventListener('change', e => {
+        const chip = e.target.closest('.chip');
+        if (!chip) return;
+        if (e.target.type === 'radio') root.querySelectorAll(`input[name="${e.target.name}"]`).forEach(r => r.closest('.chip').classList.toggle('on', r.checked));
+        else chip.classList.toggle('on', e.target.checked);
+    });
 }
 
 async function renderDetail(el, id) {
@@ -95,6 +100,16 @@ async function renderDetail(el, id) {
                 <p class="text-muted" style="margin:4px 0 10px">ההורה יבחר אחד מהאורכים המסומנים. בכל כיתה אפשר לצמצם את הבחירה בהמשך.</p>
                 <div id="mDurs">${chips('md', options, m.durations)}</div>
                 <div class="toolbar" style="margin-top:10px"><input class="input" type="number" min="1" max="120" id="customDur" placeholder="אורך אחר (דקות)" style="width:170px"><button class="btn btn-sm btn-outline" id="addDur"><i class="fas fa-plus"></i> הוספה</button></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head"><h3><i class="fas fa-phone-alt"></i> הרשמה בטלפון</h3><a class="btn btn-sm btn-outline" href="#bookings?meeting=${m.id}"><i class="fas fa-clock"></i> פגישות שנקבעו (${m.bookings_count || 0})</a></div>
+            <div class="form-grid">
+                <div class="field"><span>מצב</span><div class="chips" id="mPhone">
+                    ${[['closed', 'סגורה'], ['open', 'פתוחה להרשמה'], ['locked', 'נסגרה — שמיעה בלבד']].map(([k, l]) => `<label class="chip ${m.phone_status === k ? 'on' : ''}"><input type="radio" name="mPhone" value="${k}" ${m.phone_status === k ? 'checked' : ''}>${l}</label>`).join('')}</div>
+                    <small>רק אסיפה אחת יכולה להיות פעילה בטלפון בכל זמן</small></div>
+                <label class="field"><span>סגירת ההרשמה אוטומטית</span><input class="input" type="datetime-local" id="mCloses" value="${esc((m.booking_closes_at || '').replace(' ', 'T'))}"><small>ריק = רק ידנית. אחרי המועד ההורים יוכלו רק לשמוע</small></label>
             </div>
         </div>
 
@@ -183,7 +198,9 @@ async function renderDetail(el, id) {
             durations: $$('.cr-durs input:checked', r).map(i => +i.value)
         }));
         try {
-            await put(`/meetings/${id}`, { name: $('#mName', el).value, meeting_date: $('#mDate', el).value, notes: $('#mNotes', el).value, durations, classes });
+            const phoneStatus = ($('input[name=mPhone]:checked', el) || {}).value;
+            await put(`/meetings/${id}`, { name: $('#mName', el).value, meeting_date: $('#mDate', el).value, notes: $('#mNotes', el).value, durations, classes,
+                phone_status: phoneStatus, booking_closes_at: $('#mCloses', el).value });
             dirty.v = false;
             ok('האסיפה נשמרה');
             renderDetail(el, id);

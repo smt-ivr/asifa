@@ -8,6 +8,8 @@ import { StudentsView } from './client-students.js';
 import { ClassesView } from './client-classes.js';
 import { MeetingsView } from './client-meetings.js';
 import { AdminView } from './client-admin.js';
+import { BookingsView } from './client-bookings.js';
+import { PhoneView } from './client-phone.js';
 
 const API_BASE = '/asifa/api';
 const TOKEN_KEY = 'asifa_token';
@@ -146,6 +148,8 @@ const VIEWS = {
     students: { title: 'תלמידים', icon: 'fa-user-graduate', view: StudentsView, scope: 'tenant' },
     classes: { title: 'כיתות ומלמדים', icon: 'fa-chalkboard-teacher', view: ClassesView, scope: 'tenant' },
     meetings: { title: 'אסיפות', icon: 'fa-calendar-alt', view: MeetingsView, scope: 'tenant' },
+    bookings: { title: 'פגישות שנקבעו', icon: 'fa-clock', view: BookingsView, scope: 'tenant' },
+    phone: { title: 'הגדרות טלפון', icon: 'fa-phone-alt', view: PhoneView, scope: 'tenant', phone: true },
     admin: { title: 'מוסדות והרשאות', icon: 'fa-user-shield', view: AdminView, scope: 'super' }
 };
 
@@ -160,6 +164,8 @@ export function go(page, params) {
 }
 
 const inTenant = () => !!(state.user.tenant || state.tenantOverride);
+// מסך הגדרות הטלפון: מנהל-על תמיד; מוסד — רק אם הוגדר שהוא מנהל את הטלפון בעצמו
+const phoneAllowed = () => state.user.role === 'super' || (state.user.tenant && state.user.tenant.phone_managed_by === 'tenant');
 
 export function enterTenant(tenant) {
     state.tenantOverride = tenant ? tenant.id : null;
@@ -172,7 +178,7 @@ export function enterTenant(tenant) {
 function buildShell() {
     const u = state.user;
     const isSuper = u.role === 'super';
-    const items = Object.entries(VIEWS).filter(([, v]) => v.scope === 'tenant' ? inTenant() : isSuper);
+    const items = Object.entries(VIEWS).filter(([, v]) => (v.scope === 'tenant' ? inTenant() : isSuper) && (!v.phone || phoneAllowed()));
     $('#menu').innerHTML = items.map(([k, v]) => `<a href="#${k}" class="menu-item" data-page="${k}"><i class="fas ${v.icon}"></i> ${v.title}</a>`).join('')
         + `<div style="flex:1"></div>
         <div class="sidebar-footer"><div class="logo-wrapper"><img src="https://smt-tel-manager.netlify.app/smt.png" alt="SMT" class="smt-logo" draggable="false"></div>
@@ -198,7 +204,7 @@ function buildShell() {
 export async function render() {
     if (!state.user) return;
     let { page, params } = route();
-    const allowed = k => VIEWS[k] && (VIEWS[k].scope === 'tenant' ? inTenant() : state.user.role === 'super');
+    const allowed = k => VIEWS[k] && (VIEWS[k].scope === 'tenant' ? inTenant() : state.user.role === 'super') && (!VIEWS[k].phone || phoneAllowed());
     if (!allowed(page)) page = inTenant() ? 'dashboard' : 'admin';
     const def = VIEWS[page];
     $$('.menu-item[data-page]').forEach(a => a.classList.toggle('active', a.dataset.page === page));

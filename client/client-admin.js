@@ -16,6 +16,9 @@ function tenantForm(t = {}) {
     return `<form class="form-grid">
         <label class="field full"><span>שם המוסד</span><input class="input" name="name" required value="${esc(t.name || '')}" placeholder="חיידר בת עין"></label>
         <label class="check full"><input type="checkbox" name="active" ${t.active === false ? '' : 'checked'}> פעיל</label>
+        <label class="field full"><span>הגדרות הקו הטלפוני</span><select class="input" name="phone_managed_by">
+            <option value="super" ${t.phone_managed_by !== 'tenant' ? 'selected' : ''}>אני מגדיר להם את הטלפון (המוסד לא רואה את ההגדרות)</option>
+            <option value="tenant" ${t.phone_managed_by === 'tenant' ? 'selected' : ''}>למוסד יש גישה להגדרות הטלפון</option></select></label>
     </form>`;
 }
 
@@ -31,7 +34,8 @@ async function renderTenants(el) {
             <thead><tr><th>מוסד</th><th>מצב</th><th>טבלאות</th><th>תלמידים</th><th>כיתות</th><th>אסיפות</th><th>הרשאות כניסה</th><th></th></tr></thead>
             <tbody>${list.map(t => `<tr data-id="${t.id}">
                 <td><b style="color:var(--text-strong)">${esc(t.name)}</b></td>
-                <td>${t.active ? '<span class="badge badge-success">פעיל</span>' : '<span class="badge badge-danger">לא פעיל</span>'}</td>
+                <td>${t.active ? '<span class="badge badge-success">פעיל</span>' : '<span class="badge badge-danger">לא פעיל</span>'}
+                    <div class="text-muted" style="margin-top:3px"><i class="fas fa-phone-alt"></i> ${t.phone_managed_by === 'tenant' ? 'המוסד מנהל' : 'אני מנהל'}</div></td>
                 <td><code class="ltr">${esc(t.tables_prefix)}*</code></td>
                 <td class="num">${t.stats.students}</td><td class="num">${t.stats.classes}</td><td class="num">${t.stats.meetings}</td>
                 <td>${t.access.users + t.access.ips ? `${t.access.users} משתמשים · ${t.access.ips} IP` : '<span class="badge badge-warning">אין — לא ניתן להיכנס</span>'}</td>

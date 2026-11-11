@@ -5,11 +5,13 @@
 import m0001 from './migrations/0001_platform.sql';
 import m0002 from './migrations/0002_access_email.sql';
 import m0003 from './migrations/0003_settings.sql';
+import m0004 from './migrations/0004_phone.sql';
 
 const MIGRATIONS = [
     { version: 1, name: '0001_platform', sql: m0001 },
     { version: 2, name: '0002_access_email', sql: m0002 },
-    { version: 3, name: '0003_settings', sql: m0003 }
+    { version: 3, name: '0003_settings', sql: m0003 },
+    { version: 4, name: '0004_phone', sql: m0004 }
 ];
 let ready = null;
 

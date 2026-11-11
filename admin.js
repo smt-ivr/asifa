@@ -36,7 +36,7 @@ async function counts(env, t) {
 
 async function shape(env, t) {
     const access = await env.DB.prepare("SELECT SUM(rule_type = 'user') users, SUM(rule_type = 'ip') ips FROM access_rules WHERE tenant_id = ?").bind(t.id).first();
-    return { id: t.id, name: t.name, active: !!t.active, created_at: t.created_at, tables_prefix: `t${t.id}_`,
+    return { id: t.id, name: t.name, active: !!t.active, created_at: t.created_at, tables_prefix: `t${t.id}_`, phone_managed_by: t.phone_managed_by || 'super',
         stats: await counts(env, t), access: { users: access.users || 0, ips: access.ips || 0 } };
 }
 
@@ -58,8 +58,8 @@ export async function createTenant(request, env, ctx) {
     const name = str(body.name, 100);
     if (!name) throw badRequest('יש להזין שם מוסד');
     if (await env.DB.prepare('SELECT id FROM tenants WHERE name = ?').bind(name).first()) throw conflict('כבר קיים מוסד בשם הזה');
-    const r = await env.DB.prepare('INSERT INTO tenants (name, active, schema_version, created_at) VALUES (?, ?, 0, ?)')
-        .bind(name, body.active === false ? 0 : 1, getLocalTime()).run();
+    const r = await env.DB.prepare('INSERT INTO tenants (name, active, schema_version, created_at, phone_managed_by) VALUES (?, ?, 0, ?, ?)')
+        .bind(name, body.active === false ? 0 : 1, getLocalTime(), body.phone_managed_by === 'tenant' ? 'tenant' : 'super').run();
     const t = await getTenant(env, r.meta.last_row_id);
     await ensureTenantSchema(env, t);
     return shape(env, t);
@@ -72,7 +72,8 @@ export async function updateTenant(request, env, ctx, id) {
     const name = body.name !== undefined ? str(body.name, 100) : t.name;
     if (!name) throw badRequest('יש להזין שם מוסד');
     const active = body.active !== undefined ? (body.active ? 1 : 0) : t.active;
-    await env.DB.prepare('UPDATE tenants SET name = ?, active = ? WHERE id = ?').bind(name, active, id).run();
+    const managedBy = body.phone_managed_by === 'tenant' || body.phone_managed_by === 'super' ? body.phone_managed_by : (t.phone_managed_by || 'super');
+    await env.DB.prepare('UPDATE tenants SET name = ?, active = ?, phone_managed_by = ? WHERE id = ?').bind(name, active, managedBy, id).run();
     if (!active) await env.DB.prepare('DELETE FROM sessions WHERE rule_id IN (SELECT id FROM access_rules WHERE tenant_id = ?)').bind(id).run();
     return shape(env, await getTenant(env, id));
 }
