@@ -1,6 +1,6 @@
 // ============================================================
 //  mail.js — שליחת מיילים דרך Resend
-//  המפתח: הסוד RESEND_API_KEY · השולח: MAIL_FROM (wrangler.toml)
+//  המפתח והשולח: מההגדרות באתר (settings.js), ואם לא הוגדרו — RESEND_API_KEY / MAIL_FROM של הוורקר
 //  התבנית בנויה מטבלאות וסגנונות פנימיים כדי שתיראה אותו דבר ב-Gmail, Outlook ובטלפון.
 // ============================================================
 import { ApiError, badRequest } from './http.js';
@@ -12,11 +12,12 @@ const C = { bg: '#f1f5f9', card: '#ffffff', border: '#e2e8f0', text: '#0f172a', 
 export const validEmail = e => /^[^\s@<>"']+@[^\s@<>"']+\.[a-z]{2,}$/i.test(String(e || ''));
 export const normalizeEmail = e => String(e || '').trim().toLowerCase();
 
-export const mailReady = env => !!(env.RESEND_API_KEY && env.MAIL_FROM);
+// cfg = getConfig(env) מתוך settings.js
+export const mailReady = cfg => !!(cfg.resend_api_key && cfg.mail_from);
 
 // מעטפת אחידה: פס עליון, כרטיס, שורות פרטים, כפתור והערה
 export function renderMail({ title, preheader = '', paragraphs = [], details = [], button, note }) {
-    const p = t => `<p style="margin:0 0 14px;font-size:16px;line-height:1.7;color:${C.body}">${esc(t)}</p>`;
+    const p = t => `<p style="margin:0 0 14px;font-size:16px;line-height:1.7;color:${C.body};white-space:pre-line">${esc(t)}</p>`;
     const rows = details.length ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:6px 0 20px;background:${C.soft};border:1px solid #dbeafe;border-radius:12px">
         ${details.map(([k, v, ltr]) => `<tr><td style="padding:11px 16px;font-size:14px;color:${C.muted};white-space:nowrap;width:1%">${esc(k)}</td>
             <td style="padding:11px 16px;font-size:16px;font-weight:700;color:${C.text}"${ltr ? ' dir="ltr" align="right"' : ''}>${esc(v)}</td></tr>`).join('')}
@@ -46,28 +47,25 @@ export function renderMail({ title, preheader = '', paragraphs = [], details = [
 </td></tr></table></body></html>`;
 }
 
-// מייל פתיחת חשבון. password — רק אם הוזנה סיסמה ברגע השליחה (סיסמאות לא נשמרות במערכת)
-export function welcomeMail(env, { tenantName, displayName, username, password, email, google }) {
-    const site = env.SITE_URL || 'https://smti.uk/asifa/';
+// מייל פתיחת חשבון — הטקסטים נערכים באתר (הגדרות). password רק אם הוזנה ברגע השליחה (סיסמאות לא נשמרות)
+export function welcomeMail(cfg, { tenantName, displayName, username, password, email, google }, fill) {
+    const site = cfg.site_url || 'https://smti.uk/asifa/';
+    const vars = { 'שם': displayName || '', 'מוסד': tenantName || 'המערכת', 'שם_משתמש': username, 'מייל': email || '' };
+    const t = text => fill(text, vars).replace(/ ,/g, ',').replace(/  +/g, ' ');
     const details = [['המוסד', tenantName || 'ניהול-על'], ['שם משתמש', username]];
     if (password) details.push(['סיסמה', password, true]);
     details.push(['כתובת האתר', site.replace(/^https?:\/\//, '').replace(/\/$/, ''), true]);
-    const title = `נפתח לכם חשבון במערכת אסיפת הורים`;
     return {
         to: email,
-        subject: tenantName ? `חשבון חדש במערכת אסיפת הורים — ${tenantName}` : 'חשבון חדש במערכת אסיפת הורים',
-        title,
+        subject: t(cfg.welcome_subject),
+        title: t(cfg.welcome_title),
         preheader: `פרטי הכניסה שלכם ל${tenantName || 'מערכת'}`,
-        paragraphs: [
-            `שלום${displayName ? ` ${displayName}` : ''},`,
-            `נפתח עבורכם חשבון לניהול אסיפות ההורים${tenantName ? ` של ${tenantName}` : ''}. במערכת מכניסים את התלמידים והכיתות, ומגדירים אסיפות עם שעות ואורכי פגישה לכל כיתה.`,
-            'אלה פרטי הכניסה שלכם:'
-        ],
+        paragraphs: t(cfg.welcome_body).split(/\n\s*\n/).map(x => x.trim()).filter(Boolean),
         details,
-        button: { label: 'כניסה למערכת', url: site },
+        button: { label: t(cfg.welcome_button) || 'כניסה למערכת', url: site },
         note: [
-            google ? `אפשר גם להיכנס בלחיצה על "כניסה עם Google" עם החשבון ${email}, בלי סיסמה.` : '',
-            password ? 'מומלץ לשמור את המייל הזה במקום בטוח ולא להעביר את הסיסמה לאחרים.' : 'את הסיסמה תקבלו בנפרד ממנהל המערכת.'
+            google ? `אפשר גם להיכנס בלחיצה על "המשך עם Google" עם החשבון ${email}, בלי סיסמה.` : '',
+            password ? t(cfg.welcome_note) : 'את הסיסמה תקבלו בנפרד ממנהל המערכת.'
         ].filter(Boolean).join(' ')
     };
 }
@@ -79,14 +77,14 @@ function textVersion(m) {
 
 export const preview = m => ({ to: m.to, from: null, subject: m.subject, html: renderMail(m) });
 
-export async function sendMail(env, m) {
-    if (!mailReady(env)) throw new ApiError(409, 'mail_off', 'שליחת מיילים עדיין לא הוגדרה (חסר מפתח Resend)');
+export async function sendMail(cfg, m) {
+    if (!mailReady(cfg)) throw new ApiError(409, 'mail_off', 'שליחת מיילים עדיין לא הוגדרה — הזינו מפתח Resend בהגדרות');
     const to = normalizeEmail(m.to);
     if (!validEmail(to)) throw badRequest('כתובת המייל של הנמען אינה תקינה');
     const res = await fetch('https://api.resend.com/emails', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: env.MAIL_FROM, to: [to], subject: m.subject, html: renderMail(m), text: textVersion(m) })
+        headers: { Authorization: `Bearer ${cfg.resend_api_key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: cfg.mail_from, to: [to], subject: m.subject, html: renderMail(m), text: textVersion(m) })
     });
     if (!res.ok) {
         let reason = '';

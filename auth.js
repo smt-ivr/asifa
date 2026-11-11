@@ -10,6 +10,7 @@ import { ApiError, unauthorized, forbidden, badRequest, notFound, readJson, str 
 import { getLocalTime } from './time.js';
 import { ensureTenantSchema } from './tenant_schema.js';
 import { normalizeEmail } from './mail.js';
+import { getConfig } from './settings.js';
 
 const SESSION_DAYS = 30;
 const MAX_FAILS = 8;   // ניסיונות כושלים מאותה כתובת ברבע שעה
@@ -86,7 +87,10 @@ export async function login(request, env) {
 }
 
 // אפשרויות למסך הכניסה (מזהה Google ציבורי)
-export const loginOptions = env => ({ google_client_id: env.GOOGLE_CLIENT_ID || null });
+export async function loginOptions(env) {
+    const c = await getConfig(env);
+    return { google_client_id: c.google_enabled && c.google_client_id ? c.google_client_id : null };
+}
 
 async function openSession(env, rule, tenant) {
     const token = randomToken();
@@ -103,7 +107,8 @@ async function openSession(env, rule, tenant) {
 // POST /auth/google { credential } — אסימון מכפתור Google. Google מאמת את החתימה (tokeninfo);
 // אנחנו בודקים שהוא הונפק לאתר שלנו, שהמייל מאומת, ושיש משתמש פעיל עם המייל הזה.
 export async function loginGoogle(request, env) {
-    if (!env.GOOGLE_CLIENT_ID) throw new ApiError(403, 'google_off', 'הכניסה עם Google אינה זמינה');
+    const cfg = await getConfig(env);
+    if (!cfg.google_enabled || !cfg.google_client_id) throw new ApiError(403, 'google_off', 'הכניסה עם Google אינה זמינה');
     const body = await readJson(request);
     const credential = str(body.credential, 4096);
     if (!credential) throw badRequest('חסר אסימון Google');
@@ -114,7 +119,7 @@ export async function loginGoogle(request, env) {
 
     const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(credential)}`);
     const g = res.ok ? await res.json() : null;
-    if (!g || !g.email || g.aud !== env.GOOGLE_CLIENT_ID || String(g.email_verified) !== 'true' || Number(g.exp) * 1000 < Date.now()) {
+    if (!g || !g.email || g.aud !== cfg.google_client_id || String(g.email_verified) !== 'true' || Number(g.exp) * 1000 < Date.now()) {
         throw new ApiError(401, 'google_failed', 'האימות מול Google נכשל. נסו שוב');
     }
     const email = normalizeEmail(g.email);

@@ -4,10 +4,12 @@
 // ============================================================
 import m0001 from './migrations/0001_platform.sql';
 import m0002 from './migrations/0002_access_email.sql';
+import m0003 from './migrations/0003_settings.sql';
 
 const MIGRATIONS = [
     { version: 1, name: '0001_platform', sql: m0001 },
-    { version: 2, name: '0002_access_email', sql: m0002 }
+    { version: 2, name: '0002_access_email', sql: m0002 },
+    { version: 3, name: '0003_settings', sql: m0003 }
 ];
 let ready = null;
 

@@ -9,7 +9,8 @@ import { get, post, put, del, esc, $, $$, modal, confirmDialog, ok, fail, emptyS
 const tabs = active => `<div class="toolbar" style="margin-bottom:12px">
     <a class="btn ${active === 'tenants' ? 'btn-primary' : 'btn-outline'}" href="#admin"><i class="fas fa-school"></i> מוסדות</a>
     <a class="btn ${active === 'super' ? 'btn-primary' : 'btn-outline'}" href="#admin?tab=super"><i class="fas fa-user-shield"></i> הרשאות מנהל-על</a>
-    <a class="btn ${active === 'log' ? 'btn-primary' : 'btn-outline'}" href="#admin?tab=log"><i class="fas fa-history"></i> היסטוריית כניסות</a></div>`;
+    <a class="btn ${active === 'log' ? 'btn-primary' : 'btn-outline'}" href="#admin?tab=log"><i class="fas fa-history"></i> היסטוריית כניסות</a>
+    <a class="btn ${active === 'settings' ? 'btn-primary' : 'btn-outline'}" href="#admin?tab=settings"><i class="fas fa-cog"></i> הגדרות ומיילים</a></div>`;
 
 function tenantForm(t = {}) {
     return `<form class="form-grid">
@@ -199,6 +200,101 @@ function welcomeDialog(rule, password) {
     load();
 }
 
+// ---------- הגדרות: מיילים, Google ותבנית מייל הפתיחה ----------
+const VARS = ['שם', 'מוסד', 'שם_משתמש', 'מייל'];
+
+async function renderSettings(el) {
+    const s = await get('/admin/settings');
+    el.innerHTML = `${tabs('settings')}
+        <div class="page-head"><div><h2><i class="fas fa-cog"></i> הגדרות ומיילים</h2><p>מפתח המייל, כניסה עם Google, ונוסח מייל פתיחת החשבון</p></div>
+            <div class="actions"><button class="btn btn-primary" id="sSave"><i class="fas fa-save"></i> שמירת ההגדרות</button></div></div>
+
+        <div class="grid-2">
+            <div class="card">
+                <h3><i class="fas fa-paper-plane"></i> שליחת מיילים (Resend)</h3>
+                <div class="form-grid" style="margin-top:10px">
+                    <label class="field full"><span>מפתח Resend (RESEND_API_KEY)</span>
+                        <input class="input ltr-input" id="sKey" type="password" autocomplete="off" placeholder="${s.resend_key_set ? `מוגדר ${esc(s.resend_key_hint)} — ריק = ללא שינוי` : 're_...'}">
+                        <small>${s.resend_key_set ? '<span style="color:#059669"><i class="fas fa-check-circle"></i> מוגדר</span> · <button type="button" class="link-btn" id="sClearKey" style="background:none;border:0;color:#dc2626;cursor:pointer;padding:0">מחיקת המפתח</button>' : '<span style="color:#b45309">לא מוגדר — מיילים לא יישלחו</span>'}</small></label>
+                    <label class="field full"><span>שולח (מאת)</span><input class="input" id="sFrom" dir="auto" value="${esc(s.mail_from)}"><small>בפורמט: שם &lt;כתובת@smti.uk&gt; — הדומיין צריך להיות מאומת ב-Resend</small></label>
+                    <label class="field full"><span>כתובת האתר (לכפתור במייל)</span><input class="input ltr-input" id="sSite" value="${esc(s.site_url)}"></label>
+                </div>
+                <div class="toolbar" style="margin-top:12px"><input class="input ltr-input" id="sTestTo" type="email" placeholder="כתובת לבדיקה" style="max-width:240px">
+                    <button class="btn btn-secondary" id="sTest"><i class="fas fa-vial"></i> שליחת מייל בדיקה</button></div>
+                <small class="text-muted">מייל הבדיקה נשלח עם ההגדרות השמורות — שמרו קודם.</small>
+            </div>
+            <div class="card">
+                <h3><i class="fab fa-google"></i> כניסה עם Google</h3>
+                <div class="form-grid" style="margin-top:10px">
+                    <label class="check full"><input type="checkbox" id="sGoogle" ${s.google_enabled ? 'checked' : ''}> להציג "המשך עם Google" במסך הכניסה</label>
+                    <label class="field full"><span>Google Client ID</span><input class="input ltr-input" id="sGid" value="${esc(s.google_client_id)}"><small>נכנסים רק משתמשים שמוגדר להם מייל זהה לחשבון Google</small></label>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-head"><h3><i class="fas fa-envelope-open-text"></i> נוסח מייל פתיחת חשבון</h3>
+                <button class="btn btn-sm btn-outline" id="sReset"><i class="fas fa-undo"></i> החזרה לנוסח המקורי</button></div>
+            <div class="grid-2">
+                <div class="form-grid" style="align-content:start">
+                    <label class="field full"><span>נושא</span><input class="input tpl" id="tSubject" value="${esc(s.welcome_subject)}"></label>
+                    <label class="field full"><span>כותרת</span><input class="input tpl" id="tTitle" value="${esc(s.welcome_title)}"></label>
+                    <label class="field full"><span>תוכן</span><textarea class="input tpl" id="tBody" rows="9">${esc(s.welcome_body)}</textarea>
+                        <small>שורה ריקה = פסקה חדשה. אחרי התוכן מופיעה אוטומטית טבלת פרטי הכניסה (מוסד, שם משתמש, סיסמה, כתובת האתר)</small></label>
+                    <label class="field"><span>טקסט הכפתור</span><input class="input tpl" id="tButton" value="${esc(s.welcome_button)}"></label>
+                    <label class="field"><span>הערה בתחתית</span><input class="input tpl" id="tNote" value="${esc(s.welcome_note)}"></label>
+                    <div class="field full"><span>הוספת שדה משתנה (לחיצה מוסיפה בתוכן)</span>
+                        <div class="chips">${VARS.map(v => `<button type="button" class="chip" data-var="${v}">{${v}}</button>`).join('')}</div></div>
+                </div>
+                <div><div class="mail-meta" id="pMeta"></div><iframe id="pFrame" class="mail-frame" title="תצוגה מקדימה"></iframe>
+                    <small class="text-muted">תצוגה מקדימה עם נתונים לדוגמה · מתעדכנת תוך כדי הקלדה</small></div>
+            </div>
+        </div>`;
+
+    const vals = () => ({
+        welcome_subject: $('#tSubject', el).value, welcome_title: $('#tTitle', el).value, welcome_body: $('#tBody', el).value,
+        welcome_button: $('#tButton', el).value, welcome_note: $('#tNote', el).value, mail_from: $('#sFrom', el).value, site_url: $('#sSite', el).value
+    });
+    let timer = null;
+    const refresh = async () => {
+        try {
+            const p = await post('/admin/settings/preview', vals());
+            $('#pMeta', el).innerHTML = `<div><span>מאת:</span> <b dir="auto">${esc(p.from || '—')}</b></div><div><span>נושא:</span> <b>${esc(p.subject)}</b></div>`;
+            $('#pFrame', el).srcdoc = p.html;
+        } catch (e) { fail(e); }
+    };
+    const later = () => { clearTimeout(timer); timer = setTimeout(refresh, 350); };
+    $$('.tpl, #sFrom, #sSite', el).forEach(i => { i.oninput = later; });
+    $$('[data-var]', el).forEach(b => b.onclick = () => {
+        const ta = $('#tBody', el), v = `{${b.dataset.var}}`, a = ta.selectionStart ?? ta.value.length;
+        ta.value = ta.value.slice(0, a) + v + ta.value.slice(ta.selectionEnd ?? a);
+        ta.focus(); ta.selectionStart = ta.selectionEnd = a + v.length;
+        later();
+    });
+    $('#sReset', el).onclick = () => {
+        const d = s.defaults;
+        $('#tSubject', el).value = d.welcome_subject; $('#tTitle', el).value = d.welcome_title; $('#tBody', el).value = d.welcome_body;
+        $('#tButton', el).value = d.welcome_button; $('#tNote', el).value = d.welcome_note;
+        refresh();
+    };
+    $('#sSave', el).onclick = async () => {
+        try {
+            await put('/admin/settings', { ...vals(), resend_api_key: $('#sKey', el).value.trim(), google_enabled: $('#sGoogle', el).checked, google_client_id: $('#sGid', el).value });
+            ok('ההגדרות נשמרו');
+            renderSettings(el);
+        } catch (e) { fail(e); }
+    };
+    const clr = $('#sClearKey', el);
+    if (clr) clr.onclick = async () => {
+        if (!await confirmDialog('מחיקת מפתח', 'למחוק את מפתח Resend? מיילים לא יישלחו עד שיוזן מפתח חדש.', { okLabel: 'מחיקה', danger: true })) return;
+        try { await put('/admin/settings', { clear_resend_key: true }); ok('המפתח נמחק'); renderSettings(el); } catch (e) { fail(e); }
+    };
+    $('#sTest', el).onclick = async () => {
+        try { const r = await post('/admin/settings/test-mail', { to: $('#sTestTo', el).value.trim() }); ok(`מייל בדיקה נשלח ל-${r.to}`); } catch (e) { fail(e); }
+    };
+    refresh();
+}
+
 async function renderLog(el) {
     const list = await get('/admin/login-log');
     el.innerHTML = `${tabs('log')}
@@ -215,6 +311,7 @@ export const AdminView = {
         if (params.tenant) return renderAccess(el, params.tenant);
         if (params.tab === 'super') return renderAccess(el, 'super');
         if (params.tab === 'log') return renderLog(el);
+        if (params.tab === 'settings') return renderSettings(el);
         return renderTenants(el);
     }
 };

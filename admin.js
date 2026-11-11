@@ -15,6 +15,7 @@ import { requireSuper, hashPassword } from './auth.js';
 import { getLocalTime } from './time.js';
 import { ensureTenantSchema, dropTenantTables, tables } from './tenant_schema.js';
 import { welcomeMail, preview, sendMail, validEmail, normalizeEmail, mailReady } from './mail.js';
+import { getConfig, fillTemplate, sampleVars } from './settings.js';
 
 // שם משתמש: עברית או אנגלית, ספרות, רווח ו-. _ - @  (2–60 תווים, מתחיל באות או ספרה)
 const validUsername = u => /^[\p{L}\p{N}][\p{L}\p{N} ._@'-]{1,59}$/u.test(u);
@@ -216,10 +217,34 @@ export async function welcomeEmail(request, env, ctx, id) {
     const email = body.to ? cleanEmail(body.to) : r.email;
     if (!email) throw badRequest('למשתמש אין כתובת מייל. הוסיפו אותה בעריכת המשתמש');
     const tenant = r.tenant_id ? await env.DB.prepare('SELECT name FROM tenants WHERE id = ?').bind(r.tenant_id).first() : null;
-    const m = welcomeMail(env, {
+    const cfg = await getConfig(env);
+    const m = welcomeMail(cfg, {
         tenantName: tenant ? tenant.name : null, displayName: r.description, username: r.username,
-        password: body.password ? String(body.password).slice(0, 100) : null, email, google: !!env.GOOGLE_CLIENT_ID && email === r.email
-    });
-    if (!body.send) return { ...preview(m), from: env.MAIL_FROM || null, mail_ready: mailReady(env) };
-    return sendMail(env, m);
+        password: body.password ? String(body.password).slice(0, 100) : null, email, google: cfg.google_enabled && !!cfg.google_client_id && email === r.email
+    }, fillTemplate);
+    if (!body.send) return { ...preview(m), from: cfg.mail_from || null, mail_ready: mailReady(cfg) };
+    return sendMail(cfg, m);
+}
+
+// תצוגה מקדימה של התבנית (גם לפני שמירה) עם נתונים לדוגמה
+export async function previewTemplate(request, env, ctx) {
+    requireSuper(ctx);
+    const body = await readJson(request);
+    const cfg = { ...(await getConfig(env)) };
+    for (const k of ['welcome_subject', 'welcome_title', 'welcome_body', 'welcome_button', 'welcome_note', 'mail_from', 'site_url']) if (body[k] !== undefined) cfg[k] = String(body[k]);
+    const v = sampleVars();
+    const m = welcomeMail(cfg, { tenantName: v.tenant, displayName: v.name, username: v.username, password: v.password, email: v.email, google: true }, fillTemplate);
+    return { ...preview(m), from: cfg.mail_from || null, mail_ready: mailReady(cfg) };
+}
+
+// מייל בדיקה (עם התבנית השמורה ונתונים לדוגמה)
+export async function testMail(request, env, ctx) {
+    requireSuper(ctx);
+    const to = cleanEmail((await readJson(request)).to);
+    if (!to) throw badRequest('יש להזין כתובת מייל לבדיקה');
+    const cfg = await getConfig(env);
+    const v = sampleVars();
+    const m = welcomeMail(cfg, { tenantName: v.tenant, displayName: v.name, username: v.username, password: v.password, email: to, google: true }, fillTemplate);
+    m.subject = `[בדיקה] ${m.subject}`;
+    return sendMail(cfg, m);
 }
