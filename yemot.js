@@ -120,14 +120,25 @@ async function loadFamily(env, c, extraId) {
     return out;
 }
 
-const teacherOf = k => (k.teacher_name ? `אצל ${k.teacher_name}` : `ב${k.class_name}`);
+// "כיתה ד׳" -> "כיתה דלת" (אות בודדת עם גרש נקראת כשם האות)
+const LETTERS = { 'א': 'אלף', 'ב': 'בית', 'ג': 'גימל', 'ד': 'דלת', 'ה': 'הא', 'ו': 'וו', 'ז': 'זין', 'ח': 'חית', 'ט': 'טית', 'י': 'יוד', 'יא': 'יוד אלף', 'יב': 'יוד בית', 'יג': 'יוד גימל', 'יד': 'יוד דלת' };
+const spokenClass = name => String(name || '').replace(/(^|\s)([א-ת]{1,2})(?:['׳"״])?(?=\s|$)/g, (m, sp, l) => (LETTERS[l] ? `${sp}${LETTERS[l]}` : m));
+const teacherOf = k => (k.teacher_name ? `אצל המלמד ${k.teacher_name}` : '');
+const kidLabel = k => `${k.first_name}${k.class_name ? ` מ${spokenClass(k.class_name)}` : ''}`;
+
+// "שלום יעקב כהן" — לפי שם האב ושם המשפחה של הילד הראשון במשפחה
+function greeting(kids) {
+    const k = kids.find(x => x.father_name) || kids[0];
+    if (!k) return '';
+    return k.father_name ? `שלום ${k.father_name} ${k.last_name || ''}` : `שלום למשפחת ${k.last_name || ''}`;
+}
 
 function summary(c, kids) {
     const date = dateParts(c.meeting.meeting_date);
     return kids.flatMap(k => {
-        if (k.booking) return [`ל${k.first_name} נקבעה פגישה ${teacherOf(k)}`, ...date, `בשעה ${speakTime(k.booking.start_min)}`, `למשך ${speakMinutes(k.booking.duration)}`];
-        if (k.absent) return [`לגבי ${k.first_name} עדכנתם שלא תוכלו להגיע והמלמד ייצור עמכם קשר`];
-        return [`ל${k.first_name} עדיין לא נקבעה פגישה`];
+        if (k.booking) return [`ל${kidLabel(k)} נקבעה פגישה ${teacherOf(k)}`, ...date, `בשעה ${speakTime(k.booking.start_min)}`, `למשך ${speakMinutes(k.booking.duration)}`];
+        if (k.absent) return [`לגבי ${kidLabel(k)} עדכנתם שלא תוכלו להגיע והמלמד ייצור עמכם קשר`];
+        return [`ל${kidLabel(k)} עדיין לא נקבעה פגישה ${teacherOf(k)}`];
     });
 }
 
@@ -149,7 +160,7 @@ function mainMenu(n, c, kids, { withSummary = false, prefix = [] } = {}) {
 }
 
 function chooseChild(n, c, kids, action, intro) {
-    return ask(n, 'ch', { u: c.u, x: action }, [intro, ...kids.map((k, i) => `ל${k.first_name} הקישו ${i + 1}`), 'לחזרה הקישו 0'],
+    return ask(n, 'ch', { u: c.u, x: action }, [intro, ...kids.map((k, i) => `ל${kidLabel(k)} הקישו ${i + 1}`), 'לחזרה הקישו 0'],
         { allowed: '0' + kids.map((_, i) => i + 1).join('') });
 }
 
@@ -181,7 +192,7 @@ async function offer(env, n, c, kid, duration, after, prefix = [], { from = fals
         else if (from && pick !== after) pre.push('השעה שביקשתם תפוסה');
     }
     return ask(n, 'of', { u: c.u, s: kid.id, d: duration, x: pick }, [...pre,
-        `השעה הפנויה ${after === null ? 'המומלצת ' : ''}ל${kid.first_name} ${teacherOf(kid)}`, ...dateParts(c.meeting.meeting_date), `בשעה ${speakTime(pick)}`,
+        `השעה הפנויה ${after === null ? 'המומלצת ' : ''}ל${kidLabel(kid)} ${teacherOf(kid)}`, ...dateParts(c.meeting.meeting_date), `בשעה ${speakTime(pick)}`,
         'לאישור הקישו 1', 'לשעה פנויה אחרת הקישו 2', 'להקשת שעה מבוקשת הקישו 3', 'לחזרה לתפריט הקישו 0'], { allowed: '1230' });
 }
 
@@ -248,7 +259,7 @@ export async function handleYemot(url, env, pathId) {
             if (!settings.allow_id_login) return bye(welcome, settings.unknown_text, 'נא לפנות למזכירות המוסד');
             return ask(n, 'id', {}, [welcome, c.phone ? settings.unknown_text : '', 'נא הקישו את מספר תעודת הזהות של התלמיד ובסיומו סולמית'], { max: 0 });
         }
-        return mainMenu(n, c, kids, { withSummary: true, prefix: [welcome] });
+        return mainMenu(n, c, kids, { withSummary: true, prefix: [welcome, greeting(kids)] });
     }
 
     switch (step.stage) {
@@ -272,7 +283,8 @@ export async function handleYemot(url, env, pathId) {
                 return ask(n, 'sv', { u: s.id }, [`זוהה התלמיד ${s.first_name} ${s.last_name}`, 'לשמירת מספר הטלפון שלכם כדי שתזוהו אוטומטית בפעם הבאה הקישו 1', 'להמשך בלי לשמור הקישו 2'], { allowed: '12' });
             }
             c.u = s.id;
-            return mainMenu(n, c, await loadFamily(env, c, s.id), { withSummary: true, prefix: [`זוהה התלמיד ${s.first_name} ${s.last_name}`] });
+            const fam = await loadFamily(env, c, s.id);
+            return mainMenu(n, c, fam, { withSummary: true, prefix: [`זוהה התלמיד ${s.first_name} ${s.last_name}`, greeting(fam)] });
         }
 
         case 'sv': {
@@ -280,9 +292,11 @@ export async function handleYemot(url, env, pathId) {
                 await linkPhone(env, t, step.u, c.phone);
                 await log(env, c, 'link_phone', step.u);
                 c.u = 0;
-                return mainMenu(n, c, await loadFamily(env, c, 0), { withSummary: true, prefix: ['המספר נשמר'] });
+                const fam = await loadFamily(env, c, 0);
+                return mainMenu(n, c, fam, { withSummary: true, prefix: ['המספר נשמר', greeting(fam)] });
             }
-            return mainMenu(n, c, await loadFamily(env, c, c.u), { withSummary: true });
+            const fam = await loadFamily(env, c, c.u);
+            return mainMenu(n, c, fam, { withSummary: true, prefix: [greeting(fam)] });
         }
 
         case 'mm': {
@@ -348,7 +362,7 @@ export async function handleYemot(url, env, pathId) {
             }
             await log(env, c, 'book', kid.id, `${Math.floor(step.x / 60)}:${String(step.x % 60).padStart(2, '0')} · ${duration} דק׳`);
             const fresh = await loadFamily(env, c, c.u);
-            return afterBooking(n, c, fresh, ['הפגישה נקבעה בהצלחה', `ל${kid.first_name} ${teacherOf(kid)}`, ...dateParts(c.meeting.meeting_date), `בשעה ${speakTime(step.x)}`]);
+            return afterBooking(n, c, fresh, ['הפגישה נקבעה בהצלחה', `ל${kidLabel(kid)} ${teacherOf(kid)}`, ...dateParts(c.meeting.meeting_date), `בשעה ${speakTime(step.x)}`]);
         }
 
         case 'tm': {
