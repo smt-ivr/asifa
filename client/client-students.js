@@ -165,20 +165,27 @@ function mappingStep(m, table, onImported) {
 function openImport(onImported) {
     const { el: m } = modal({
         title: 'ייבוא תלמידים מאקסל', icon: 'fa-file-excel', wide: true,
-        body: `<label class="import-drop" id="dropZone"><i class="fas fa-cloud-upload-alt"></i><b>בחרו קובץ אקסל</b> או גררו אותו לכאן
-                <div class="text-muted" style="margin-top:6px">xlsx · xls · csv — השורה הראשונה היא שורת הכותרות</div>
-                <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden></label>
-            <details style="margin-top:14px"><summary style="cursor:pointer;color:var(--primary-color)">או הדביקו ישירות מאקסל</summary>
-                <textarea class="input" id="pasteBox" rows="6" style="margin-top:8px" placeholder="העתיקו מאקסל כולל שורת הכותרות והדביקו כאן"></textarea>
-                <button class="btn btn-sm btn-secondary" id="pasteGo" style="margin-top:6px">המשך</button></details>
-            <div class="notice" style="margin-top:14px"><i class="fas fa-lightbulb"></i><span>עמודות מומלצות: שם פרטי · שם משפחה · כיתה · מספר זהות · שם האב · ועמודת טלפון לכל מספר (למשל "טלפון אב", "טלפון אם", "טלפון בית").</span></div>`,
+        body: `<div class="import-drop" id="dropZone" role="button" tabindex="0">
+                <i class="fas fa-file-excel drop-ico"></i>
+                <div class="drop-title"><b>גררו לכאן קובץ אקסל</b></div>
+                <div class="text-muted">xlsx · xls · csv — השורה הראשונה בקובץ היא שורת הכותרות</div>
+                <span class="btn btn-primary drop-btn"><i class="fas fa-folder-open"></i> בחירת קובץ מהמחשב</span>
+            </div>
+            <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+            <details class="import-paste"><summary><i class="fas fa-paste"></i> או הדביקו ישירות מאקסל</summary>
+                <textarea class="input" id="pasteBox" rows="6" placeholder="העתיקו מאקסל את הטבלה כולל שורת הכותרות והדביקו כאן"></textarea>
+                <button class="btn btn-sm btn-secondary" id="pasteGo" style="margin-top:8px"><i class="fas fa-arrow-left"></i> המשך</button></details>
+            <div class="notice" style="margin-top:14px;margin-bottom:0"><i class="fas fa-lightbulb"></i><span>עמודות מומלצות: שם פרטי · שם משפחה · כיתה · מספר זהות · שם האב · ועמודת טלפון לכל מספר (למשל "טלפון אב", "טלפון אם", "טלפון בית"). אחרי בחירת הקובץ תוכלו לבדוק ולתקן מה כל עמודה.</span></div>`,
         buttons: [{ label: 'ביטול' }]
     });
     const handle = async file => {
         try { mappingStep(m, await sheetToRows(file), onImported); } catch (e) { fail(e); }
     };
-    $('#fileInput', m).onchange = e => e.target.files[0] && handle(e.target.files[0]);
+    const fileInput = $('#fileInput', m);
+    fileInput.onchange = e => { if (e.target.files[0]) handle(e.target.files[0]); e.target.value = ''; };
     const zone = $('#dropZone', m);
+    zone.onclick = () => fileInput.click();
+    zone.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } };
     zone.ondragover = e => { e.preventDefault(); zone.classList.add('over'); };
     zone.ondragleave = () => zone.classList.remove('over');
     zone.ondrop = e => { e.preventDefault(); zone.classList.remove('over'); if (e.dataTransfer.files[0]) handle(e.dataTransfer.files[0]); };

@@ -93,10 +93,8 @@ export function modal({ title, icon = '', body, buttons = [], wide = false, onOp
         <div class="modal-body">${body}</div>
         ${buttons.length ? `<div class="modal-footer">${buttons.map((b, i) => `<button class="btn ${b.cls || 'btn-outline'}" data-i="${i}">${b.icon ? `<i class="fas ${b.icon}"></i>` : ''}${esc(b.label)}</button>`).join('')}</div>` : ''}
     </div>`;
-    const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
-    const onKey = e => { if (e.key === 'Escape') close(); };
-    document.addEventListener('keydown', onKey);
-    back.addEventListener('mousedown', e => { if (e.target === back) close(); });
+    // נסגר רק בכפתור X (או בכפתורי החלון) — לא בלחיצה על הרקע ולא ב-Esc
+    const close = () => back.remove();
     back.querySelector('.close-modal-btn').onclick = close;
     back.querySelectorAll('.modal-footer .btn').forEach(btn => {
         btn.onclick = async () => {
