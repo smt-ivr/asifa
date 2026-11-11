@@ -1,254 +1,214 @@
 // ============================================================
-//  client-meetings.js — אסיפות: רשימה, הקמה, שעות לכל כיתה, פתיחה/נעילה וצינתוקים
+//  client-meetings.js — אסיפות
+//  רשימה · אסיפה חדשה (שם בלבד) · הגדרות אסיפה:
+//    תאריך האסיפה (מוצג גם בתאריך עברי) · אורכי פגישה שההורה יוכל לבחור ·
+//    לכל כיתה: משתתפת או לא, שעות, ואילו אורכי פגישה מותרים בה
 // ============================================================
-(function () {
-    const esc = App.esc;
-    const TZ_TARGETS = { all: 'כל ההורים', missing: 'הורים שלא קבעו תור', booked: 'הורים שקבעו תור (תזכורת)', absent: 'הורים שהודיעו שלא יגיעו' };
-    const TZ_KIND = { open: 'פתיחת הרשמה', missing: 'לא קבעו (אוטומטי)', reminder: 'תזכורת (אוטומטי)', manual_all: 'כל ההורים', manual_missing: 'לא קבעו', manual_booked: 'קבעו תור', manual_absent: 'הודיעו שלא יגיעו' };
+import { get, post, put, del, esc, $, $$, modal, confirmDialog, ok, fail, emptyState, go } from './client-app.js';
+import { hebrewDate, gregorian } from './client-hebdate.js';
 
-    function meetingForm(m = {}) {
-        const today = new Date().toISOString().slice(0, 10);
-        return `<form class="form-grid">
-            <label class="field full"><span>כותרת</span><input class="input" name="title" required value="${esc(m.title || 'אסיפת הורים')}"></label>
-            <label class="field"><span>תאריך האסיפה</span><input class="input" type="date" name="meeting_date" required value="${esc(m.meeting_date || today)}"></label>
-            <label class="field"><span>נעילת ההרשמה (אוטומטית)</span><input class="input" type="datetime-local" name="booking_closes_at" value="${esc((m.booking_closes_at || '').replace(' ', 'T'))}">
-                <small>ריק = נעילה ידנית בלבד</small></label>
-            <label class="check full"><input type="checkbox" name="allow_long" ${m.allow_long !== false ? 'checked' : ''}><span>לאפשר תור של 10 דקות<small>ההורה בוחר בטלפון 5 או 10 דקות</small></span></label>
-            <label class="field"><span>מקסימום תורים של 10 דקות לכיתה</span><input class="input" type="number" min="0" name="max_long_per_class" value="${esc(m.max_long_per_class || '')}" placeholder="ללא הגבלה"></label>
-            <label class="field"><span>מרווח בין תורים של אחים (דקות)</span><input class="input" type="number" min="0" max="30" name="family_gap" value="${esc(m.family_gap ?? 0)}">
-                <small>זמן מעבר בין כיתות להורה עם כמה ילדים</small></label>
-            <label class="check full"><input type="checkbox" name="auto_missing_tzintuk" ${m.auto_missing_tzintuk !== false ? 'checked' : ''}><span>בנעילה: צינתוק מיוחד להורים שלא קבעו<small>יוצא אוטומטית כשההרשמה ננעלת</small></span></label>
-            <label class="check full"><input type="checkbox" name="auto_assign" ${m.auto_assign ? 'checked' : ''}><span>בנעילה: לשבץ אוטומטית את מי שלא קבע<small>בשעות שנשארו פנויות, ליד התורים של האחים. הצינתוק יוצא אחרי השיבוץ ויודיע להם לשמוע את התור</small></span></label>
-            <label class="field"><span>צינתוק תזכורת ביום האסיפה בשעה</span><input class="input" type="time" name="reminder_time" value="${esc(m.reminder_time || '')}"><small>ריק = ללא תזכורת. נשלח למי שקבע תור</small></label>
-            <label class="field full"><span>הערות פנימיות</span><textarea class="input" name="notes" rows="2">${esc(m.notes || '')}</textarea></label>
-        </form>`;
-    }
+const PRESET = [5, 10, 15, 20, 30];
+const toMin = t => (/^\d{2}:\d{2}$/.test(t || '') ? +t.slice(0, 2) * 60 + +t.slice(3) : null);
 
-    function readMeetingForm(modal) {
-        const d = App.formData(modal.querySelector('form'));
-        return { ...d, booking_closes_at: d.booking_closes_at ? d.booking_closes_at.replace('T', ' ') : '', max_long_per_class: d.max_long_per_class || null };
-    }
+function openNew() {
+    modal({
+        title: 'אסיפה חדשה', icon: 'fa-calendar-plus',
+        body: `<form><label class="field"><span>שם האסיפה</span><input class="input" name="name" required placeholder="אסיפת הורים — חורף תשפ״ז"></label></form>`,
+        buttons: [{ label: 'יצירה', cls: 'btn-primary', icon: 'fa-check', action: async m => {
+            const name = $('[name=name]', m).value.trim();
+            if (!name) throw new Error('יש להזין שם לאסיפה');
+            const r = await post('/meetings', { name });
+            ok('האסיפה נוצרה — עכשיו מגדירים אותה');
+            go('meetings', { id: r.id });
+        } }, { label: 'ביטול' }]
+    });
+}
 
-    function openEditor(m) {
-        App.modal({
-            title: m ? 'עריכת אסיפה' : 'אסיפה חדשה', body: meetingForm(m || {}), wide: true,
-            buttons: [{
-                label: m ? 'שמירה' : 'יצירה', cls: 'btn-primary', action: async modal => {
-                    const body = readMeetingForm(modal);
-                    if (!m) {
-                        const classes = await App.classes();
-                        body.classes = classes.filter(c => c.active).map(c => ({ class_id: c.id, start: '19:00', end: '21:00', location: c.location || '' }));
-                    }
-                    const r = m ? await App.put(`/meetings/${m.id}`, body) : await App.post('/meetings', body);
-                    App.cache.meetings = null;
-                    App.ok(m ? 'האסיפה נשמרה' : 'האסיפה נוצרה — עכשיו קבעו את השעות לכל כיתה');
-                    App.go('meetings', { id: r.id });
-                }
-            }, { label: 'ביטול' }]
+async function renderList(el, params) {
+    const list = await get('/meetings');
+    el.innerHTML = `
+        <div class="page-head">
+            <div><h2><i class="fas fa-calendar-alt"></i> אסיפות</h2><p>יוצרים אסיפה, ובתוכה קובעים תאריך, שעות לכל כיתה ואורכי פגישה</p></div>
+            <div class="actions"><button class="btn btn-primary" id="btnNew"><i class="fas fa-plus"></i> אסיפה חדשה</button></div>
+        </div>
+        <div class="card flush">${list.length ? `<div class="table-container"><table class="modern-table">
+            <thead><tr><th>אסיפה</th><th>תאריך</th><th>אורכי פגישה</th><th>כיתות משתתפות</th><th></th></tr></thead>
+            <tbody>${list.map(m => `<tr>
+                <td><a href="#meetings?id=${m.id}"><b>${esc(m.name)}</b></a></td>
+                <td>${m.meeting_date ? `${esc(hebrewDate(m.meeting_date))} <span class="text-muted">(${gregorian(m.meeting_date)})</span>` : '<span class="badge badge-warning">לא נקבע</span>'}</td>
+                <td>${m.durations.map(d => `<span class="badge badge-primary">${d} דק׳</span>`).join(' ')}</td>
+                <td>${m.classes_count || '<span class="badge badge-warning">לא הוגדרו</span>'}</td>
+                <td class="td-actions"><a class="btn btn-sm btn-outline" href="#meetings?id=${m.id}"><i class="fas fa-cog"></i> הגדרות</a></td></tr>`).join('')}</tbody></table></div>`
+            : emptyState('fa-calendar-plus', 'עדיין אין אסיפות', 'יוצרים אסיפה עם שם בלבד, ואת כל השאר מגדירים בתוכה.', '<button class="btn btn-primary" data-new><i class="fas fa-plus"></i> אסיפה חדשה</button>')}</div>`;
+    $('#btnNew', el).onclick = openNew;
+    const n = $('[data-new]', el);
+    if (n) n.onclick = openNew;
+    if (params.new) { history.replaceState(null, '', '#meetings'); openNew(); }
+}
+
+function chips(name, options, selected) {
+    return `<div class="chips">${options.map(d => `<label class="chip ${selected.includes(d) ? 'on' : ''}"><input type="checkbox" name="${name}" value="${d}" ${selected.includes(d) ? 'checked' : ''}>${d} דק׳</label>`).join('')}</div>`;
+}
+
+function bindChips(root) {
+    root.addEventListener('change', e => { if (e.target.closest('.chip')) e.target.closest('.chip').classList.toggle('on', e.target.checked); });
+}
+
+async function renderDetail(el, id) {
+    const m = await get(`/meetings/${id}`);
+    let options = [...new Set([...PRESET, ...m.durations])].sort((a, b) => a - b);
+    const dirty = { v: false };
+
+    const classRow = c => {
+        const on = c.included;
+        const durs = on ? c.durations : m.durations;
+        return `<div class="class-row ${on ? '' : 'off'}" data-class="${c.class_id}" data-students="${c.students}">
+            <input type="checkbox" class="cr-on" ${on ? 'checked' : ''} title="משתתפת באסיפה">
+            <div><div class="class-name">${esc(c.class_name)}</div>
+                <div class="class-teacher">${c.teacher_name ? esc(c.teacher_name) : '<a href="#classes" style="color:#b45309">חסר שם מלמד</a>'} · ${c.students} תלמידים</div></div>
+            <input class="input ltr-input cr-start" type="time" step="300" value="${esc(c.start_time || '19:00')}">
+            <input class="input ltr-input cr-end" type="time" step="300" value="${esc(c.end_time || '21:00')}">
+            <div class="cr-durs">${chips('cd', m.durations, durs)}</div>
+            <div class="capacity"></div>
+        </div>`;
+    };
+
+    el.innerHTML = `<div id="mRoot">
+        <a class="back-link" href="#meetings"><i class="fas fa-arrow-right"></i> כל האסיפות</a>
+        <div class="page-head">
+            <div><h2><i class="fas fa-calendar-alt"></i> ${esc(m.name)}</h2><p id="headDate">${m.meeting_date ? esc(hebrewDate(m.meeting_date)) : 'תאריך האסיפה עוד לא נקבע'}</p></div>
+            <div class="actions"><button class="btn btn-danger" id="btnDelete"><i class="fas fa-trash"></i> מחיקה</button><button class="btn btn-primary" id="btnSaveTop"><i class="fas fa-save"></i> שמירה</button></div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <h3><i class="fas fa-info-circle"></i> פרטי האסיפה</h3>
+                <div class="form-grid" style="margin-top:10px">
+                    <label class="field full"><span>שם האסיפה</span><input class="input" id="mName" value="${esc(m.name)}"></label>
+                    <label class="field full"><span>תאריך האסיפה הכללית</span><input class="input" type="date" id="mDate" value="${esc(m.meeting_date || '')}">
+                        <div class="hebdate" id="mHeb">${m.meeting_date ? esc(hebrewDate(m.meeting_date)) : ''}</div></label>
+                    <label class="field full"><span>הערות</span><textarea class="input" id="mNotes" rows="2">${esc(m.notes || '')}</textarea></label>
+                </div>
+            </div>
+            <div class="card">
+                <h3><i class="fas fa-stopwatch"></i> אורכי פגישה שההורה יוכל לבחור</h3>
+                <p class="text-muted" style="margin:4px 0 10px">ההורה יבחר אחד מהאורכים המסומנים. בכל כיתה אפשר לצמצם את הבחירה בהמשך.</p>
+                <div id="mDurs">${chips('md', options, m.durations)}</div>
+                <div class="toolbar" style="margin-top:10px"><input class="input" type="number" min="1" max="120" id="customDur" placeholder="אורך אחר (דקות)" style="width:170px"><button class="btn btn-sm btn-outline" id="addDur"><i class="fas fa-plus"></i> הוספה</button></div>
+            </div>
+        </div>
+
+        <div class="card flush">
+            <div class="card-head" style="padding-bottom:10px"><h3><i class="fas fa-chalkboard-teacher"></i> כיתות, שעות ואורכי פגישה</h3>
+                <div class="toolbar"><span class="text-muted">לכל המסומנות:</span>
+                    <input class="input ltr-input" type="time" step="300" id="allStart" value="19:00" style="width:115px"><span class="text-muted">עד</span>
+                    <input class="input ltr-input" type="time" step="300" id="allEnd" value="21:00" style="width:115px">
+                    <button class="btn btn-sm btn-secondary" id="applyAll">החלה</button></div></div>
+            ${m.classes.length ? `<div class="class-row head"><span></span><span>כיתה</span><span>משעה</span><span>עד שעה</span><span>אורכי פגישה בכיתה</span><span>מקום</span></div>
+                <div id="classRows">${m.classes.map(classRow).join('')}</div>`
+                : emptyState('fa-chalkboard', 'אין כיתות במוסד', 'קודם מכניסים תלמידים — הכיתות נוצרות אוטומטית.', '<a class="btn btn-secondary" href="#students?import=1"><i class="fas fa-file-excel"></i> ייבוא תלמידים</a>')}
+        </div>
+        <div class="actions" style="justify-content:flex-end"><button class="btn btn-primary" id="btnSave"><i class="fas fa-save"></i> שמירת האסיפה</button></div></div>`;
+
+    // המאזינים על עוטף חדש בכל ציור — לא מצטברים
+    const root = $('#mRoot', el);
+    bindChips(root);
+    root.addEventListener('input', () => { dirty.v = true; });
+    root.addEventListener('change', () => { dirty.v = true; capacity(); });
+
+    const meetingDurs = () => $$('#mDurs input:checked', el).map(i => +i.value);
+
+    // חישוב מקום: כמה פגישות נכנסות בשעות לפי האורך הקצר, מול מספר התלמידים
+    function capacity() {
+        $$('.class-row[data-class]', el).forEach(row => {
+            const out = row.querySelector('.capacity');
+            const on = row.querySelector('.cr-on').checked;
+            row.classList.toggle('off', !on);
+            if (!on) { out.textContent = 'לא משתתפת'; out.className = 'capacity'; return; }
+            const s = toMin(row.querySelector('.cr-start').value), e = toMin(row.querySelector('.cr-end').value);
+            const durs = $$('.cr-durs input:checked', row).map(i => +i.value);
+            const students = +row.dataset.students;
+            if (s === null || e === null || e <= s) { out.textContent = 'שעות לא תקינות'; out.className = 'capacity bad'; return; }
+            if (!durs.length) { out.textContent = 'לא נבחר אורך'; out.className = 'capacity bad'; return; }
+            const total = e - s, slots = Math.floor(total / Math.min(...durs));
+            out.innerHTML = `${Math.floor(total / 60) ? `${Math.floor(total / 60)} ש׳ ` : ''}${total % 60 ? `${total % 60} ד׳` : ''} · עד ${slots} פגישות`;
+            out.className = `capacity ${slots < students ? 'bad' : 'good'}`;
+            out.title = slots < students ? `אין מספיק מקום ל-${students} תלמידים` : '';
         });
     }
 
-    async function renderList(el, params) {
-        const list = await App.meetings(true);
-        el.innerHTML = `<div class="page-head"><div><h1>אסיפות</h1><p>כל אסיפה: שעות לכל כיתה, פתיחת הרשמה בטלפון, נעילה והדפסות</p></div>
-            <div class="actions"><button class="btn btn-primary" id="new-meeting">+ אסיפה חדשה</button></div></div>
-            <div class="card">${list.length ? `<div class="table-wrap"><table class="table">
-                <thead><tr><th>אסיפה</th><th>תאריך</th><th>מצב</th><th>קבעו</th><th>לא קבעו</th><th>חזרו אליי</th><th></th></tr></thead>
-                <tbody>${list.map(m => `<tr><td><a href="#/meetings?id=${m.id}"><b>${esc(m.title)}</b></a></td><td>${esc(m.date_label)}</td><td>${App.statusBadge(m)}</td>
-                    <td class="num">${m.stats.booked}/${m.stats.students}</td><td class="num">${m.stats.missing}</td><td class="num">${m.stats.absent}</td>
-                    <td class="actions-cell"><a class="btn btn-sm" href="#/meetings?id=${m.id}">ניהול</a></td></tr>`).join('')}</tbody></table></div>`
-                : App.empty('עדיין אין אסיפות', 'צרו אסיפה ראשונה, קבעו שעות לכל כיתה ופתחו את ההרשמה.')}</div>`;
-        App.$('#new-meeting').onclick = () => openEditor(null);
-        if (params.new) openEditor(null);
+    // שינוי אורכי האסיפה מעדכן את האפשרויות בכל כיתה
+    function refreshClassChips() {
+        const md = meetingDurs();
+        $$('.class-row[data-class]', el).forEach(row => {
+            const cur = $$('.cr-durs input:checked', row).map(i => +i.value);
+            const keep = cur.filter(d => md.includes(d));
+            row.querySelector('.cr-durs').innerHTML = chips('cd', md, keep.length ? keep : md);
+        });
+        capacity();
     }
-
-    function classTimesTable(classes, times) {
-        const byClass = new Map(times.map(t => [t.class_id, t]));
-        return `<div class="toolbar" style="margin-bottom:12px">
-                <span class="muted small">החלה מהירה על כל הכיתות המסומנות:</span>
-                <input class="input ltr-input" type="time" id="all-start" value="19:00" style="min-width:110px">
-                <span>עד</span><input class="input ltr-input" type="time" id="all-end" value="21:00" style="min-width:110px">
-                <button class="btn btn-sm" id="apply-all" type="button">החל</button>
-            </div>
-            <div class="table-wrap"><table class="table class-times">
-            <thead><tr><th></th><th>כיתה</th><th>משעה</th><th>עד שעה</th><th>הפסקות</th><th>מיקום</th></tr></thead>
-            <tbody>${classes.map(c => {
-                const t = byClass.get(c.id);
-                return `<tr data-class="${c.id}">
-                    <td><input type="checkbox" class="ct-on" ${t ? 'checked' : ''}></td>
-                    <td><b>${esc(c.name)}</b><div class="small muted">${esc(c.teacher_name || '')}</div></td>
-                    <td><input class="input ltr-input ct-start" type="time" step="300" value="${esc(t ? t.start : '19:00')}"></td>
-                    <td><input class="input ltr-input ct-end" type="time" step="300" value="${esc(t ? t.end : '21:00')}"></td>
-                    <td><input class="input ltr-input ct-breaks" placeholder="20:00-20:15" value="${esc(t ? t.breaks.map(b => `${b.from}-${b.to}`).join(', ') : '')}"></td>
-                    <td><input class="input ct-loc" value="${esc(t ? (t.location || '') : (c.location || ''))}" placeholder="חדר / כיתה"></td></tr>`;
-            }).join('')}</tbody></table></div>`;
-    }
-
-    function readClassTimes(el) {
-        return App.$$('tr[data-class]', el).filter(tr => tr.querySelector('.ct-on').checked).map(tr => ({
-            class_id: +tr.dataset.class,
-            start: tr.querySelector('.ct-start').value,
-            end: tr.querySelector('.ct-end').value,
-            location: tr.querySelector('.ct-loc').value,
-            breaks: tr.querySelector('.ct-breaks').value.split(/[,;]+/).map(s => s.trim()).filter(Boolean).map(s => {
-                const [from, to] = s.split('-').map(x => x.trim());
-                return { from, to };
-            })
-        }));
-    }
-
-    async function renderDetail(el, id) {
-        const [m, classes, log] = await Promise.all([App.get(`/meetings/${id}`), App.classes(true), App.get(`/meetings/${id}/tzintuk`).catch(() => [])]);
-        const t = m.stats.total;
-        const hasTimes = m.classes.length > 0;
-        const statusActions = {
-            draft: `<button class="btn btn-success" data-status="open">פתיחת ההרשמה</button>`,
-            open: `<button class="btn btn-primary" data-status="locked">נעילת ההרשמה</button><button class="btn" data-status="draft">החזרה לטיוטה</button>`,
-            locked: `<button class="btn" data-status="open">פתיחה מחדש</button><button class="btn" data-status="done">סימון כהסתיימה</button>`,
-            done: `<button class="btn" data-status="locked">החזרה למצב נעול</button>`
-        }[m.status];
-
-        el.innerHTML = `
-            <div class="page-head">
-                <div><a href="#/meetings" class="small">→ כל האסיפות</a><h1>${esc(m.title)}</h1>
-                    <p>${esc(m.date_label)} · ${App.statusBadge(m)} · ${t.booked} מתוך ${t.students} קבעו תור</p></div>
-                <div class="actions"><button class="btn" id="edit">עריכת פרטים</button><a class="btn" href="#/board?meeting=${m.id}">לוח תורים</a>
-                    <a class="btn" href="#/print?meeting=${m.id}">הדפסות</a><button class="btn btn-danger" id="delete">מחיקה</button></div>
-            </div>
-
-            <div class="grid grid-2">
-                <div class="card"><div class="card-head"><h2>שלבים</h2></div><div class="card-body">
-                    <ol class="steps">
-                        <li class="${hasTimes ? 'done' : ''}"><div><b>שעות לכל כיתה</b><div class="small muted">בטבלה למטה — כולל הפסקות ומיקום</div></div></li>
-                        <li><div><b>פתקי פרסום הקו להורים</b><div class="small muted">מספר הטלפון וקוד התלמיד — <a href="#/print?meeting=${m.id}&type=announce">להדפסה</a></div></div></li>
-                        <li class="${m.status !== 'draft' ? 'done' : ''}"><div><b>פתיחת ההרשמה</b><div class="small muted">אפשר לשלוח צינתוק לכל ההורים באותו רגע</div></div></li>
-                        <li class="${m.status === 'locked' || m.status === 'done' ? 'done' : ''}"><div><b>נעילת ההרשמה</b><div class="small muted">${m.booking_closes_at ? `אוטומטית ב-<span class="num">${esc(App.fmtStamp(m.booking_closes_at))}</span>` : 'ידנית'}${m.auto_missing_tzintuk ? ' · צינתוק ל"לא קבעו"' : ''}${m.auto_assign ? ' · שיבוץ אוטומטי' : ''}</div></div></li>
-                        <li><div><b>פתקי תור ולוחות למלמדים</b><div class="small muted"><a href="#/print?meeting=${m.id}&type=slips">פתקי תור</a> · <a href="#/print?meeting=${m.id}&type=teacher">לוח מלמד</a></div></div></li>
-                    </ol>
-                </div></div>
-                <div class="card"><div class="card-head"><h2>מצב ההרשמה</h2>${App.statusBadge(m)}</div><div class="card-body">
-                    <p class="muted" style="margin-top:0">${{
-                        draft: 'האסיפה בטיוטה: ההורים עדיין לא יכולים לקבוע תורים בטלפון.',
-                        open: 'ההרשמה פתוחה: הורים יכולים לקבוע, לשנות ולבטל תורים בטלפון.',
-                        locked: 'ההרשמה נעולה: הורים יכולים רק לשמוע את התורים ולעדכן שלא יגיעו. המזכירות יכולה עדיין לשנות תורים בלוח.',
-                        done: 'האסיפה הסתיימה.'
-                    }[m.status]}</p>
-                    <div class="actions">${statusActions}${m.status !== 'draft' && m.status !== 'done' ? '<button class="btn" id="auto-assign">שיבוץ אוטומטי עכשיו</button>' : ''}</div>
-                    <hr style="border:0;border-top:1px solid var(--border);margin:18px 0">
-                    <h3 style="margin-bottom:10px">שליחת צינתוק</h3>
-                    <div class="toolbar"><select class="input" id="tz-target">${Object.entries(TZ_TARGETS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select>
-                        <button class="btn" id="tz-send">שליחה…</button></div>
-                    <p class="small faint" style="margin-bottom:0">הצינתוק יוצא ממספר הקו של המוסד, כדי שההורים יחזרו אליו.</p>
-                </div></div>
-            </div>
-
-            <div class="card">
-                <div class="card-head"><h2>שעות האסיפה לכל כיתה</h2><button class="btn btn-primary" id="save-times">שמירת השעות</button></div>
-                <div class="card-body">${classes.length ? classTimesTable(classes.filter(c => c.active || m.classes.some(x => x.class_id === c.id)), m.classes)
-                    : App.empty('אין כיתות', 'הוסיפו כיתות לפני הגדרת השעות.', '<a class="btn" href="#/classes">לכיתות</a>')}</div>
-            </div>
-
-            <div class="card">
-                <div class="card-head"><h2>צינתוקים שנשלחו</h2></div>
-                ${log.length ? `<div class="table-wrap"><table class="table"><thead><tr><th>מתי</th><th>סוג</th><th>מספרים</th><th>תוצאה</th><th>נשלח ע"י</th></tr></thead>
-                <tbody>${log.map(l => `<tr><td class="num small">${esc(l.created_at)}</td><td>${esc(TZ_KIND[l.kind] || l.kind)}</td><td class="num">${l.phones_count}</td>
-                    <td>${l.ok ? '<span class="badge badge-success">נשלח</span>' : `<span class="badge badge-danger" title="${esc(l.response || '')}">נכשל</span>`}</td><td>${esc(l.triggered_by === 'auto' ? 'אוטומטי' : l.triggered_by)}</td></tr>`).join('')}</tbody></table></div>`
-                : App.empty('עדיין לא נשלחו צינתוקים')}
-            </div>`;
-
-        App.$('#edit').onclick = () => openEditor(m);
-        App.$('#delete').onclick = async () => {
-            if (!await App.confirm('מחיקת אסיפה', `למחוק את "${esc(m.title)}" כולל ${t.booked} תורים שנקבעו? לא ניתן לשחזר.`, { okLabel: 'מחיקה', danger: true })) return;
-            try { await App.del(`/meetings/${m.id}`); App.cache.meetings = null; App.ok('האסיפה נמחקה'); App.go('meetings'); } catch (e) { App.fail(e); }
-        };
-
-        const applyAll = App.$('#apply-all');
-        if (applyAll) applyAll.onclick = () => {
-            App.$$('tr[data-class]', el).forEach(tr => {
-                if (!tr.querySelector('.ct-on').checked) return;
-                tr.querySelector('.ct-start').value = App.$('#all-start').value;
-                tr.querySelector('.ct-end').value = App.$('#all-end').value;
-            });
-        };
-        App.$('#save-times').onclick = async () => {
-            try {
-                await App.put(`/meetings/${m.id}`, { classes: readClassTimes(el) });
-                App.cache.meetings = null;
-                App.ok('השעות נשמרו');
-                renderDetail(el, id);
-            } catch (e) { App.fail(e); }
-        };
-
-        App.$$('[data-status]', el).forEach(b => b.onclick = () => changeStatus(el, m, b.dataset.status));
-        const aa = App.$('#auto-assign');
-        if (aa) aa.onclick = async () => {
-            if (!await App.confirm('שיבוץ אוטומטי', `לשבץ עכשיו ${t.missing} תלמידים שלא קבעו ולא הודיעו שלא יגיעו, בשעות הפנויות?`)) return;
-            try {
-                const r = await App.post(`/meetings/${m.id}/auto-assign`);
-                App.ok(`שובצו ${r.assigned} תלמידים${r.failed ? `, ${r.failed} לא שובצו (אין מקום)` : ''}`);
-                renderDetail(el, id);
-            } catch (e) { App.fail(e); }
-        };
-        App.$('#tz-send').onclick = async () => {
-            const target = App.$('#tz-target').value;
-            try {
-                const preview = await App.post(`/meetings/${m.id}/tzintuk`, { target, dry_run: true });
-                if (!preview.would_send) return App.toast('אין מספרים לשליחה בקבוצה זו');
-                if (!await App.confirm('שליחת צינתוק', `לשלוח צינתוק ל-${preview.would_send} מספרים (${TZ_TARGETS[target]})?`, { okLabel: 'שליחה' })) return;
-                const r = await App.post(`/meetings/${m.id}/tzintuk`, { target });
-                r.ok ? App.ok(`נשלח צינתוק ל-${r.sent} מספרים`) : App.fail(new Error('השליחה נכשלה — בדקו את הטוקן של ימות בהגדרות'));
-                renderDetail(el, id);
-            } catch (e) { App.fail(e); }
-        };
-    }
-
-    function changeStatus(el, m, status) {
-        const t = m.stats.total;
-        if (status === 'open' && m.status === 'draft') {
-            App.modal({
-                title: 'פתיחת ההרשמה',
-                body: `<p style="margin-top:0">מרגע הפתיחה הורים יוכלו להתקשר ולקבוע תורים.</p>
-                    <label class="check"><input type="checkbox" id="open-tz" checked><span>לשלוח עכשיו צינתוק לכל ההורים (${t.students} תלמידים)<small>ההורים יראו שיחה שלא נענתה ממספר הקו ויחזרו אליו</small></span></label>`,
-                buttons: [{ label: 'פתיחה', cls: 'btn-success', action: async modal => {
-                    const r = await App.post(`/meetings/${m.id}/status`, { status: 'open', tzintuk: modal.querySelector('#open-tz').checked });
-                    App.cache.meetings = null;
-                    App.ok('ההרשמה נפתחה' + (r.tzintuk ? ` · צינתוק נשלח ל-${r.tzintuk.sent} מספרים` : ''));
-                    renderDetail(el, m.id);
-                } }, { label: 'ביטול' }]
-            });
-            return;
-        }
-        if (status === 'locked' && m.status === 'open') {
-            App.modal({
-                title: 'נעילת ההרשמה',
-                body: `<p style="margin-top:0">אחרי הנעילה הורים לא יוכלו לשנות תורים בטלפון. ${t.missing} תלמידים עדיין ללא תור.</p>
-                    <label class="check"><input type="checkbox" id="lock-assign" ${m.auto_assign ? 'checked' : ''}><span>לשבץ אוטומטית את מי שלא קבע</span></label><br>
-                    <label class="check"><input type="checkbox" id="lock-tz" ${m.auto_missing_tzintuk ? 'checked' : ''}><span>צינתוק מיוחד להורים שלא קבעו</span></label>`,
-                buttons: [{ label: 'נעילה', cls: 'btn-primary', action: async modal => {
-                    const r = await App.post(`/meetings/${m.id}/status`, { status: 'locked', auto_assign: modal.querySelector('#lock-assign').checked, tzintuk: modal.querySelector('#lock-tz').checked });
-                    App.cache.meetings = null;
-                    const a = r.actions || {};
-                    App.ok('ההרשמה ננעלה' + (a.auto_assign ? ` · שובצו ${a.auto_assign.assigned}` : '') + (a.tzintuk ? ` · צינתוק ל-${a.tzintuk.sent}` : ''));
-                    renderDetail(el, m.id);
-                } }, { label: 'ביטול' }]
-            });
-            return;
-        }
-        (async () => {
-            try {
-                await App.post(`/meetings/${m.id}/status`, { status });
-                App.cache.meetings = null;
-                App.ok('המצב עודכן');
-                renderDetail(el, m.id);
-            } catch (e) { App.fail(e); }
-        })();
-    }
-
-    App.pages.meetings = {
-        title: 'אסיפות',
-        roles: ['admin', 'super'],
-        render(el, params) {
-            return params.id ? renderDetail(el, +params.id) : renderList(el, params);
-        }
+    $('#mDurs', el).addEventListener('change', refreshClassChips);
+    $('#addDur', el).onclick = () => {
+        const v = parseInt($('#customDur', el).value, 10);
+        if (!(v >= 1 && v <= 120)) return fail(new Error('אורך פגישה בין 1 ל-120 דקות'));
+        const sel = meetingDurs();
+        if (!options.includes(v)) options = [...options, v].sort((a, b) => a - b);
+        $('#mDurs', el).innerHTML = chips('md', options, [...new Set([...sel, v])]);
+        $('#customDur', el).value = '';
+        refreshClassChips();
     };
-})();
+    $('#mDate', el).oninput = e => {
+        const h = hebrewDate(e.target.value);
+        $('#mHeb', el).textContent = h;
+        $('#headDate', el).textContent = h || 'תאריך האסיפה עוד לא נקבע';
+    };
+    const apply = $('#applyAll', el);
+    if (apply) apply.onclick = () => {
+        $$('.class-row[data-class]', el).forEach(row => {
+            if (!row.querySelector('.cr-on').checked) return;
+            row.querySelector('.cr-start').value = $('#allStart', el).value;
+            row.querySelector('.cr-end').value = $('#allEnd', el).value;
+        });
+        dirty.v = true;
+        capacity();
+    };
+
+    const save = async () => {
+        const durations = meetingDurs();
+        if (!durations.length) return fail(new Error('יש לבחור לפחות אורך פגישה אחד'));
+        const classes = $$('.class-row[data-class]', el).filter(r => r.querySelector('.cr-on').checked).map(r => ({
+            class_id: +r.dataset.class,
+            start_time: r.querySelector('.cr-start').value,
+            end_time: r.querySelector('.cr-end').value,
+            durations: $$('.cr-durs input:checked', r).map(i => +i.value)
+        }));
+        try {
+            await put(`/meetings/${id}`, { name: $('#mName', el).value, meeting_date: $('#mDate', el).value, notes: $('#mNotes', el).value, durations, classes });
+            dirty.v = false;
+            ok('האסיפה נשמרה');
+            renderDetail(el, id);
+        } catch (e) { fail(e); }
+    };
+    $('#btnSave', el).onclick = save;
+    $('#btnSaveTop', el).onclick = save;
+    $('#btnDelete', el).onclick = async () => {
+        if (!await confirmDialog('מחיקת אסיפה', `למחוק את "${esc(m.name)}" עם כל ההגדרות שלה?`, { okLabel: 'מחיקה', danger: true })) return;
+        try { await del(`/meetings/${id}`); ok('האסיפה נמחקה'); go('meetings'); } catch (e) { fail(e); }
+    };
+
+    // אזהרה ביציאה בלי שמירה
+    const leave = e => {
+        if (!dirty.v || !el.isConnected || !location.hash.startsWith('#meetings')) return;
+        e.preventDefault();
+        e.returnValue = '';
+    };
+    window.onbeforeunload = leave;
+    capacity();
+}
+
+export const MeetingsView = {
+    render(el, params) {
+        window.onbeforeunload = null;
+        return params.id ? renderDetail(el, +params.id) : renderList(el, params);
+    }
+};

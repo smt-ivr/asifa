@@ -1,78 +1,74 @@
 // ============================================================
-//  classes.js — כיתות ומלמדים
+//  classes.js — כיתות ומלמדים (בטבלאות של המוסד)
+//  GET /classes · POST /classes · PUT /classes/:id · DELETE /classes/:id
+//  כיתות נוצרות גם אוטומטית בייבוא תלמידים (classIdByName)
 // ============================================================
 import { readJson, str, int, badRequest, notFound, conflict } from './http.js';
-import { requireAdmin, requireTenant, classScope } from './auth.js';
-import { stamp } from './time.js';
-import { normalizePhone } from './phones.js';
+import { requireTenant } from './auth.js';
+import { getLocalTime } from './time.js';
+import { tables } from './tenant_schema.js';
 
 export async function listClasses(env, ctx) {
     requireTenant(ctx);
-    const scope = classScope(ctx);
-    const { results } = await env.DB.prepare(`SELECT c.*, (SELECT COUNT(*) FROM students s WHERE s.class_id = c.id AND s.active = 1) students
-        FROM classes c WHERE c.tenant_id = ? ${scope ? 'AND c.id = ?' : ''} ORDER BY c.sort_order, c.name`)
-        .bind(...(scope ? [ctx.tenantId, scope] : [ctx.tenantId])).all();
+    const t = tables(ctx.tenant.id);
+    const { results } = await env.DB.prepare(`SELECT c.*, (SELECT COUNT(*) FROM ${t.students} s WHERE s.class_id = c.id) students
+        FROM ${t.classes} c ORDER BY c.sort_order, c.name`).all();
     return results;
 }
 
-function fields(body, current = {}) {
-    const name = body.name !== undefined ? str(body.name, 60) : current.name;
-    if (!name) throw badRequest('חסר שם כיתה');
+function fields(body, cur = {}) {
+    const name = body.name !== undefined ? str(body.name, 60) : cur.name;
+    if (!name) throw badRequest('יש להזין שם כיתה');
     return {
         name,
-        teacher_name: body.teacher_name !== undefined ? str(body.teacher_name, 80) : current.teacher_name ?? null,
-        teacher_phone: body.teacher_phone !== undefined ? normalizePhone(body.teacher_phone) : current.teacher_phone ?? null,
-        location: body.location !== undefined ? str(body.location, 80) : current.location ?? null,
-        sort_order: body.sort_order !== undefined ? (int(body.sort_order) ?? 0) : current.sort_order ?? 0,
-        active: body.active !== undefined ? (body.active ? 1 : 0) : current.active ?? 1
+        teacher_name: body.teacher_name !== undefined ? (str(body.teacher_name, 80) || null) : (cur.teacher_name ?? null),
+        sort_order: body.sort_order !== undefined ? (int(body.sort_order) ?? 0) : (cur.sort_order ?? 0)
     };
 }
 
+const unique = e => { if (/UNIQUE/.test(e.message)) throw conflict('כבר קיימת כיתה בשם הזה'); throw e; };
+
 export async function createClass(request, env, ctx) {
-    requireAdmin(ctx);
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
     const f = fields(await readJson(request));
-    try {
-        const r = await env.DB.prepare(`INSERT INTO classes (tenant_id, name, teacher_name, teacher_phone, location, sort_order, active, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(ctx.tenantId, f.name, f.teacher_name, f.teacher_phone, f.location, f.sort_order, f.active, stamp()).run();
-        return env.DB.prepare('SELECT * FROM classes WHERE id = ?').bind(r.meta.last_row_id).first();
-    } catch (e) {
-        if (/UNIQUE/.test(e.message)) throw conflict('כבר קיימת כיתה בשם הזה', 'class_exists');
-        throw e;
-    }
+    const r = await env.DB.prepare(`INSERT INTO ${t.classes} (name, teacher_name, sort_order, created_at) VALUES (?, ?, ?, ?)`)
+        .bind(f.name, f.teacher_name, f.sort_order, getLocalTime()).run().catch(unique);
+    return env.DB.prepare(`SELECT * FROM ${t.classes} WHERE id = ?`).bind(r.meta.last_row_id).first();
 }
 
 export async function updateClass(request, env, ctx, id) {
-    requireAdmin(ctx);
-    const c = await env.DB.prepare('SELECT * FROM classes WHERE id = ? AND tenant_id = ?').bind(id, ctx.tenantId).first();
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
+    const c = await env.DB.prepare(`SELECT * FROM ${t.classes} WHERE id = ?`).bind(id).first();
     if (!c) throw notFound('הכיתה לא נמצאה');
     const f = fields(await readJson(request), c);
-    try {
-        await env.DB.prepare('UPDATE classes SET name = ?, teacher_name = ?, teacher_phone = ?, location = ?, sort_order = ?, active = ? WHERE id = ?')
-            .bind(f.name, f.teacher_name, f.teacher_phone, f.location, f.sort_order, f.active, id).run();
-    } catch (e) {
-        if (/UNIQUE/.test(e.message)) throw conflict('כבר קיימת כיתה בשם הזה', 'class_exists');
-        throw e;
-    }
-    return env.DB.prepare('SELECT * FROM classes WHERE id = ?').bind(id).first();
+    await env.DB.prepare(`UPDATE ${t.classes} SET name = ?, teacher_name = ?, sort_order = ? WHERE id = ?`)
+        .bind(f.name, f.teacher_name, f.sort_order, id).run().catch(unique);
+    return env.DB.prepare(`SELECT * FROM ${t.classes} WHERE id = ?`).bind(id).first();
 }
 
 export async function deleteClass(env, ctx, id) {
-    requireAdmin(ctx);
-    const used = await env.DB.prepare('SELECT COUNT(*) n FROM students WHERE class_id = ? AND tenant_id = ?').bind(id, ctx.tenantId).first();
-    if (used.n) throw conflict(`בכיתה יש ${used.n} תלמידים. העבירו או מחקו אותם קודם, או סמנו את הכיתה כלא פעילה`, 'class_in_use');
-    const r = await env.DB.prepare('DELETE FROM classes WHERE id = ? AND tenant_id = ?').bind(id, ctx.tenantId).run();
-    if (!r.meta.changes) throw notFound('הכיתה לא נמצאה');
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
+    const n = await env.DB.prepare(`SELECT COUNT(*) n FROM ${t.students} WHERE class_id = ?`).bind(id).first();
+    if (n.n) throw conflict(`בכיתה יש ${n.n} תלמידים. העבירו אותם לכיתה אחרת או מחקו אותם קודם`);
+    await env.DB.batch([
+        env.DB.prepare(`DELETE FROM ${t.meetingClasses} WHERE class_id = ?`).bind(id),
+        env.DB.prepare(`DELETE FROM ${t.classes} WHERE id = ?`).bind(id)
+    ]);
     return { deleted: true };
 }
 
-// מציאת כיתה לפי שם או יצירתה (לייבוא)
+// מזהה כיתה לפי שם; יוצר אותה אם אינה קיימת
 export async function classIdByName(env, tenantId, name, cache) {
     const key = str(name, 60);
     if (!key) return null;
     if (cache.has(key)) return cache.get(key);
-    let c = await env.DB.prepare('SELECT id FROM classes WHERE tenant_id = ? AND name = ?').bind(tenantId, key).first();
+    const t = tables(tenantId);
+    let c = await env.DB.prepare(`SELECT id FROM ${t.classes} WHERE name = ?`).bind(key).first();
     if (!c) {
-        const r = await env.DB.prepare('INSERT INTO classes (tenant_id, name, sort_order, active, created_at) VALUES (?, ?, 0, 1, ?)').bind(tenantId, key, stamp()).run();
+        const r = await env.DB.prepare(`INSERT INTO ${t.classes} (name, sort_order, created_at) VALUES (?, 0, ?)`).bind(key, getLocalTime()).run();
         c = { id: r.meta.last_row_id };
     }
     cache.set(key, c.id);

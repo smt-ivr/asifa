@@ -13,11 +13,6 @@ fallthrough = true
 binding = "DB"
 database_name = "asifa"
 database_id = "22909c66-3a8f-4e47-9f82-7a94c0ede541"
-migrations_dir = "migrations"
-
-# משימות אוטומטיות (נעילה, צינתוק "לא קבעו", תזכורת): בחשבון החינמי אין מקום ל-Cron נוסף,
-# לכן המתזמן (scheduler) קורא כל 5 דקות ל-POST /asifa/api/cron עם הכותרת X-Cron-Key = הסוד CRON_KEY.
-# בנוסף המשימות רצות "על הדרך" בבקשות לאתר ולקו (לכל היותר פעם בשתי דקות).
 
 [observability]
 enabled = true

@@ -1,54 +1,178 @@
 // ============================================================
-//  client-admin.js — ניהול-על: מוסדות (לקוחות), מספרי חיוג, משתמש מנהל ראשון
+//  client-admin.js — ניהול-על: מוסדות, הרשאות כניסה (משתמשים / IP) והיסטוריית כניסות
+//  #admin                 רשימת מוסדות
+//  #admin?tenant=:id      הרשאות של מוסד
+//  #admin?tab=super       הרשאות מנהל-על      #admin?tab=log   היסטוריית כניסות
 // ============================================================
-(function () {
-    const esc = App.esc;
+import { get, post, put, del, esc, $, $$, modal, confirmDialog, ok, fail, emptyState, go, enterTenant, formData } from './client-app.js';
 
-    const form = (t = {}) => `<form class="form-grid">
-        <label class="field full"><span>שם המוסד</span><input class="input" name="name" required value="${esc(t.name || '')}"></label>
-        <label class="field"><span>מספרי חיוג (ApiDID)</span><textarea class="input ltr-input" name="dids" rows="2" placeholder="0771234567">${esc((t.dids || []).join('\n'))}</textarea><small>המספרים שההורים מחייגים אליהם. מזהים את המוסד בשיחה</small></label>
-        <label class="field"><span>מספר הקו להדפסה ולצינתוק</span><input class="input ltr-input" name="line_number" value="${esc(t.line_number || '')}" placeholder="ברירת מחדל: מספר החיוג הראשון"></label>
-        <label class="field full"><span>טוקן ימות המשיח</span><input class="input ltr-input" type="password" name="yemot_token" autocomplete="off" placeholder="${t.has_yemot_token ? '•••••••• (מוגדר)' : 'מספר:סיסמה'}"></label>
-        ${t.id ? `<label class="check full"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}><span>פעיל<small>מוסד לא פעיל: הקו מושבת והמשתמשים לא נכנסים</small></span></label>` : `
-        <div class="full"><h3 style="margin-top:6px">משתמש מנהל למוסד</h3></div>
-        <label class="field"><span>שם משתמש (באנגלית)</span><input class="input ltr-input" name="admin_username"></label>
-        <label class="field"><span>סיסמה</span><input class="input ltr-input" name="admin_password" type="text" autocomplete="off"><small>לפחות 8 תווים</small></label>`}
+const tabs = active => `<div class="toolbar" style="margin-bottom:12px">
+    <a class="btn ${active === 'tenants' ? 'btn-primary' : 'btn-outline'}" href="#admin"><i class="fas fa-school"></i> מוסדות</a>
+    <a class="btn ${active === 'super' ? 'btn-primary' : 'btn-outline'}" href="#admin?tab=super"><i class="fas fa-user-shield"></i> הרשאות מנהל-על</a>
+    <a class="btn ${active === 'log' ? 'btn-primary' : 'btn-outline'}" href="#admin?tab=log"><i class="fas fa-history"></i> היסטוריית כניסות</a></div>`;
+
+function tenantForm(t = {}) {
+    return `<form class="form-grid">
+        <label class="field full"><span>שם המוסד</span><input class="input" name="name" required value="${esc(t.name || '')}" placeholder="חיידר בת עין"></label>
+        <label class="check full"><input type="checkbox" name="active" ${t.active === false ? '' : 'checked'}> פעיל</label>
     </form>`;
+}
 
-    const read = m => {
-        const d = App.formData(m.querySelector('form'));
-        d.dids = (d.dids || '').split(/[\s,;]+/).filter(Boolean);
-        if (!d.yemot_token) delete d.yemot_token;
-        return d;
-    };
+async function renderTenants(el) {
+    const list = await get('/admin/tenants');
+    const reload = () => renderTenants(el);
+    el.innerHTML = `${tabs('tenants')}
+        <div class="page-head">
+            <div><h2><i class="fas fa-school"></i> מוסדות</h2><p>כל מוסד מקבל טבלאות נפרדות משלו במסד (מתחילות במזהה שלו)</p></div>
+            <div class="actions"><button class="btn btn-primary" id="btnNew"><i class="fas fa-plus"></i> מוסד חדש</button></div>
+        </div>
+        <div class="card flush">${list.length ? `<div class="table-container"><table class="modern-table">
+            <thead><tr><th>מוסד</th><th>מצב</th><th>טבלאות</th><th>תלמידים</th><th>כיתות</th><th>אסיפות</th><th>הרשאות כניסה</th><th></th></tr></thead>
+            <tbody>${list.map(t => `<tr data-id="${t.id}">
+                <td><b style="color:var(--text-strong)">${esc(t.name)}</b></td>
+                <td>${t.active ? '<span class="badge badge-success">פעיל</span>' : '<span class="badge badge-danger">לא פעיל</span>'}</td>
+                <td><code class="ltr">${esc(t.tables_prefix)}*</code></td>
+                <td class="num">${t.stats.students}</td><td class="num">${t.stats.classes}</td><td class="num">${t.stats.meetings}</td>
+                <td>${t.access.users + t.access.ips ? `${t.access.users} משתמשים · ${t.access.ips} IP` : '<span class="badge badge-warning">אין — לא ניתן להיכנס</span>'}</td>
+                <td class="td-actions">
+                    <a class="btn btn-sm btn-secondary" href="#admin?tenant=${t.id}"><i class="fas fa-key"></i> הרשאות</a>
+                    <button class="btn btn-sm btn-outline" data-enter><i class="fas fa-sign-in-alt"></i> כניסה</button>
+                    <button class="icon-btn" data-edit title="עריכה"><i class="fas fa-pen"></i></button>
+                    <button class="icon-btn danger" data-del title="מחיקה"><i class="fas fa-trash"></i></button></td></tr>`).join('')}</tbody></table></div>`
+            : emptyState('fa-school', 'אין עדיין מוסדות', 'מוסיפים מוסד (שם בלבד), ואחר כך מגדירים לו שם משתמש או כתובת IP לכניסה.', '<button class="btn btn-primary" data-new><i class="fas fa-plus"></i> מוסד חדש</button>')}</div>`;
 
-    async function render(el) {
-        const list = await App.get('/tenants');
-        el.innerHTML = `<div class="page-head"><div><h1>מוסדות</h1><p>כל מוסד הוא לקוח נפרד: נתונים, קו טלפוני ומשתמשים משלו</p></div>
-            <div class="actions"><button class="btn btn-primary" id="add">+ מוסד חדש</button></div></div>
-            <div class="card">${list.length ? `<div class="table-wrap"><table class="table">
-                <thead><tr><th>מוסד</th><th>מספרי חיוג</th><th>תלמידים</th><th>כיתות</th><th>אסיפות</th><th>ימות</th><th></th></tr></thead>
-                <tbody>${list.map(t => `<tr ${t.active ? '' : 'style="opacity:.55"'}><td><b>${esc(t.name)}</b><div class="small faint">מזהה ${t.id}</div></td>
-                    <td class="ltr small">${t.dids.map(App.phoneFmt).join('<br>') || '—'}</td><td class="num">${t.stats.students}</td><td class="num">${t.stats.classes}</td><td class="num">${t.stats.meetings}</td>
-                    <td>${t.has_yemot_token ? '<span class="badge badge-success">מוגדר</span>' : '<span class="badge badge-warning">חסר טוקן</span>'}</td>
-                    <td class="actions-cell"><button class="btn btn-sm btn-primary" data-enter="${t.id}">כניסה</button> <button class="btn btn-sm" data-edit="${t.id}">עריכה</button></td></tr>`).join('')}</tbody></table></div>`
-                : App.empty('אין מוסדות', 'הוסיפו את המוסד הראשון שקנה את המערכת.')}</div>`;
+    const openNew = () => modal({
+        title: 'מוסד חדש', icon: 'fa-school', body: tenantForm(),
+        buttons: [{ label: 'יצירה', cls: 'btn-primary', icon: 'fa-check', action: async m => {
+            const f = formData($('form', m));
+            const t = await post('/admin/tenants', f);
+            ok(`המוסד נוצר (טבלאות ${t.tables_prefix}). עכשיו מוסיפים לו הרשאת כניסה`);
+            go('admin', { tenant: t.id });
+        } }, { label: 'ביטול' }]
+    });
+    $('#btnNew', el).onclick = openNew;
+    const n = $('[data-new]', el);
+    if (n) n.onclick = openNew;
 
-        App.$('#add').onclick = () => App.modal({ title: 'מוסד חדש', body: form(), wide: true,
-            buttons: [{ label: 'יצירה', cls: 'btn-primary', action: async m => { await App.post('/tenants', read(m)); App.ok('המוסד נוצר'); render(el); } }, { label: 'ביטול' }] });
-        App.$$('[data-edit]', el).forEach(b => b.onclick = () => {
-            const t = list.find(x => x.id === +b.dataset.edit);
-            App.modal({ title: t.name, body: form(t), wide: true,
-                buttons: [{ label: 'שמירה', cls: 'btn-primary', action: async m => { await App.put(`/tenants/${t.id}`, read(m)); App.ok('נשמר'); render(el); } }, { label: 'ביטול' }] });
+    const row = b => list.find(t => t.id === +b.closest('tr').dataset.id);
+    $$('[data-enter]', el).forEach(b => b.onclick = () => enterTenant({ id: row(b).id, name: row(b).name }));
+    $$('[data-edit]', el).forEach(b => b.onclick = () => {
+        const t = row(b);
+        modal({ title: t.name, icon: 'fa-school', body: tenantForm(t),
+            buttons: [{ label: 'שמירה', cls: 'btn-primary', icon: 'fa-save', action: async m => { await put(`/admin/tenants/${t.id}`, formData($('form', m))); ok('נשמר'); reload(); } }, { label: 'ביטול' }] });
+    });
+    $$('[data-del]', el).forEach(b => b.onclick = () => {
+        const t = row(b);
+        modal({
+            title: `מחיקת ${t.name}`, icon: 'fa-exclamation-triangle',
+            body: `<p>המחיקה תמחק את המוסד, את כל ההרשאות שלו ואת <b>כל הטבלאות שלו</b> (${t.stats.students} תלמידים, ${t.stats.classes} כיתות, ${t.stats.meetings} אסיפות). לא ניתן לשחזר.</p>
+                <label class="field" style="margin-top:12px"><span>לאישור הקלידו את שם המוסד: <b>${esc(t.name)}</b></span><input class="input" id="confirmName"></label>`,
+            buttons: [{ label: 'מחיקה לצמיתות', cls: 'btn-danger-solid', icon: 'fa-trash', action: async m => {
+                await del(`/admin/tenants/${t.id}`, { confirm_name: $('#confirmName', m).value.trim() }); ok('המוסד נמחק'); reload();
+            } }, { label: 'ביטול' }]
         });
-        App.$$('[data-enter]', el).forEach(b => b.onclick = () => {
-            const t = list.find(x => x.id === +b.dataset.enter);
-            App.setTenantOverride(t.id);
-            App.cache.tenantName = t.name;
-            App.renderShell();
-            App.go('dashboard');
+    });
+}
+
+// ---------- הרשאות (למוסד או למנהל-על) ----------
+async function renderAccess(el, tenantId) {
+    const isSuper = tenantId === 'super';
+    const [rules, tenants, me] = await Promise.all([
+        get(`/admin/access?tenant_id=${tenantId}`),
+        isSuper ? Promise.resolve([]) : get('/admin/tenants'),
+        get('/admin/my-ip').catch(() => ({ ip: '' }))
+    ]);
+    const tenant = isSuper ? null : tenants.find(t => t.id === +tenantId);
+    if (!isSuper && !tenant) throw new Error('המוסד לא נמצא');
+    const reload = () => renderAccess(el, tenantId);
+    const users = rules.filter(r => r.rule_type === 'user'), ips = rules.filter(r => r.rule_type === 'ip');
+
+    const table = (items, kind) => items.length ? `<div class="table-container"><table class="modern-table">
+        <thead><tr><th>${kind === 'user' ? 'שם משתמש' : 'כתובת IP'}</th><th>תיאור</th><th>מצב</th><th>שימוש אחרון</th><th></th></tr></thead>
+        <tbody>${items.map(r => `<tr data-id="${r.id}">
+            <td><b class="ltr" style="color:var(--text-strong)">${esc(kind === 'user' ? r.username : r.ip)}</b></td><td>${esc(r.description || '')}</td>
+            <td>${r.active ? '<span class="badge badge-success">פעיל</span>' : '<span class="badge badge-danger">מושבת</span>'}</td>
+            <td class="num text-muted">${esc(r.last_used_at || '—')}</td>
+            <td class="td-actions"><button class="icon-btn" data-edit title="עריכה"><i class="fas fa-pen"></i></button><button class="icon-btn danger" data-del title="מחיקה"><i class="fas fa-trash"></i></button></td></tr>`).join('')}</tbody></table></div>`
+        : `<p class="text-muted" style="padding:6px 16px 14px">${kind === 'user' ? 'אין משתמשים' : 'אין כתובות IP מורשות'}</p>`;
+
+    el.innerHTML = `${isSuper ? tabs('super') : '<a class="back-link" href="#admin"><i class="fas fa-arrow-right"></i> כל המוסדות</a>'}
+        <div class="page-head">
+            <div><h2><i class="fas fa-key"></i> ${isSuper ? 'הרשאות מנהל-על' : `הרשאות כניסה — ${esc(tenant.name)}`}</h2>
+                <p>${isSuper ? 'מי שנכנס כאן רואה את כל המוסדות' : 'כל משתמש או IP כאן נכנס רק למוסד הזה'}</p></div>
+            ${!isSuper ? `<div class="actions"><button class="btn btn-outline" id="btnEnter"><i class="fas fa-sign-in-alt"></i> כניסה למוסד</button></div>` : ''}
+        </div>
+        ${!isSuper && !tenant.active ? '<div class="notice warning"><i class="fas fa-exclamation-triangle"></i><span>המוסד לא פעיל — אף אחד לא יוכל להיכנס עד שיופעל.</span></div>' : ''}
+        <div class="card flush"><div class="card-head" style="padding-bottom:10px"><h3><i class="fas fa-user"></i> משתמשים (שם משתמש + סיסמה)</h3>
+            <button class="btn btn-sm btn-primary" id="addUser"><i class="fas fa-plus"></i> משתמש</button></div>${table(users, 'user')}</div>
+        <div class="card flush"><div class="card-head" style="padding-bottom:10px"><h3><i class="fas fa-network-wired"></i> כתובות IP מורשות (כניסה אוטומטית בלי סיסמה)</h3>
+            <button class="btn btn-sm btn-primary" id="addIp"><i class="fas fa-plus"></i> כתובת IP</button></div>${table(ips, 'ip')}</div>`;
+
+    const scope = isSuper ? null : +tenantId;
+    $('#addUser', el).onclick = () => modal({
+        title: 'משתמש חדש', icon: 'fa-user',
+        body: `<form class="form-grid">
+            <label class="field"><span>שם משתמש</span><input class="input ltr-input" name="username" required autocomplete="off"><small>אותיות באנגלית / ספרות</small></label>
+            <label class="field"><span>סיסמה</span><input class="input ltr-input" name="password" required autocomplete="new-password"><small>לפחות 6 תווים</small></label>
+            <label class="field full"><span>תיאור</span><input class="input" name="description" placeholder="מזכירות / מנהל"></label></form>`,
+        buttons: [{ label: 'שמירה', cls: 'btn-primary', icon: 'fa-save', action: async m => {
+            await post('/admin/access', { ...formData($('form', m)), rule_type: 'user', tenant_id: scope }); ok('המשתמש נוסף'); reload();
+        } }, { label: 'ביטול' }]
+    });
+    $('#addIp', el).onclick = () => modal({
+        title: 'כתובת IP מורשית', icon: 'fa-network-wired',
+        body: `<form class="form-grid">
+            <label class="field full"><span>כתובת IP</span><input class="input ltr-input" name="ip" required placeholder="1.2.3.4">
+                ${me.ip ? `<small>הכתובת שלכם כרגע: <button type="button" class="btn btn-sm btn-outline ltr" id="useMyIp" style="height:22px">${esc(me.ip)}</button></small>` : ''}</label>
+            <label class="field full"><span>תיאור</span><input class="input" name="description" placeholder="מחשב המזכירות"></label></form>`,
+        onOpen: m => { const b = $('#useMyIp', m); if (b) b.onclick = () => { $('[name=ip]', m).value = me.ip; }; },
+        buttons: [{ label: 'שמירה', cls: 'btn-primary', icon: 'fa-save', action: async m => {
+            await post('/admin/access', { ...formData($('form', m)), rule_type: 'ip', tenant_id: scope }); ok('הכתובת נוספה'); reload();
+        } }, { label: 'ביטול' }]
+    });
+    $$('[data-edit]', el).forEach(b => b.onclick = () => {
+        const r = rules.find(x => x.id === +b.closest('tr').dataset.id);
+        modal({
+            title: r.rule_type === 'user' ? r.username : r.ip, icon: 'fa-key',
+            body: `<form class="form-grid">
+                ${r.rule_type === 'user'
+                    ? `<label class="field"><span>שם משתמש</span><input class="input ltr-input" name="username" value="${esc(r.username)}"></label>
+                       <label class="field"><span>סיסמה חדשה</span><input class="input ltr-input" name="password" autocomplete="new-password" placeholder="ריק = ללא שינוי"></label>`
+                    : `<label class="field full"><span>כתובת IP</span><input class="input ltr-input" name="ip" value="${esc(r.ip)}"></label>`}
+                <label class="field full"><span>תיאור</span><input class="input" name="description" value="${esc(r.description || '')}"></label>
+                <label class="check full"><input type="checkbox" name="active" ${r.active ? 'checked' : ''}> פעיל</label></form>`,
+            buttons: [{ label: 'שמירה', cls: 'btn-primary', icon: 'fa-save', action: async m => {
+                const f = formData($('form', m));
+                if (!f.password) delete f.password;
+                await put(`/admin/access/${r.id}`, f); ok('נשמר'); reload();
+            } }, { label: 'ביטול' }]
         });
+    });
+    $$('[data-del]', el).forEach(b => b.onclick = async () => {
+        const r = rules.find(x => x.id === +b.closest('tr').dataset.id);
+        if (!await confirmDialog('מחיקת הרשאה', `למחוק את ${esc(r.username || r.ip)}?`, { okLabel: 'מחיקה', danger: true })) return;
+        try { await del(`/admin/access/${r.id}`); ok('נמחק'); reload(); } catch (e) { fail(e); }
+    });
+    const enter = $('#btnEnter', el);
+    if (enter) enter.onclick = () => enterTenant({ id: tenant.id, name: tenant.name });
+}
+
+async function renderLog(el) {
+    const list = await get('/admin/login-log');
+    el.innerHTML = `${tabs('log')}
+        <div class="card flush">${list.length ? `<div class="table-container"><table class="modern-table">
+            <thead><tr><th>מתי (UTC)</th><th>תוצאה</th><th>שיטה</th><th>משתמש</th><th>מוסד</th><th>IP</th></tr></thead>
+            <tbody>${list.map(l => `<tr><td class="num">${esc(l.created_at)}</td>
+                <td>${l.success ? '<span class="badge badge-success">הצליח</span>' : '<span class="badge badge-danger">נכשל</span>'}</td>
+                <td>${l.method === 'ip' ? 'IP' : 'סיסמה'}</td><td class="ltr">${esc(l.username || '')}</td><td>${esc(l.tenant_name || (l.success && !l.tenant_id ? 'מנהל-על' : ''))}</td>
+                <td class="ltr num">${esc(l.ip || '')}</td></tr>`).join('')}</tbody></table></div>` : emptyState('fa-history', 'אין כניסות')}</div>`;
+}
+
+export const AdminView = {
+    render(el, params) {
+        if (params.tenant) return renderAccess(el, params.tenant);
+        if (params.tab === 'super') return renderAccess(el, 'super');
+        if (params.tab === 'log') return renderLog(el);
+        return renderTenants(el);
     }
-
-    App.pages.admin = { title: 'מוסדות', roles: ['super'], render };
-})();
+};

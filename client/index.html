@@ -3,28 +3,79 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>אסיפה — ניהול אסיפות הורים</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/asifa/styles.css?v=1">
-    <link rel="stylesheet" href="/asifa/print.css?v=1">
+    <title>אסיפת הורים</title>
+    <link rel="icon" type="image/png" href="https://smt-tel-manager.netlify.app/smt.png">
+    <link rel="stylesheet" href="/asifa/styles.css">
+    <link rel="stylesheet" href="/asifa/login.css">
+    <link rel="stylesheet" href="/asifa/mobile.css" media="(max-width: 768px)">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js" defer></script>
 </head>
 <body>
-    <div id="root"><div class="loading"><span class="spinner"></span></div></div>
-    <div id="print-area"></div>
-    <div class="toasts" id="toasts"></div>
+    <!-- מסך כניסה — העיצוב ב-login.css, ההתנהגות ב-client-login.js -->
+    <div id="auth-overlay" class="lg-overlay">
+        <div class="lg-card" role="dialog" aria-labelledby="lgTitle">
+            <aside class="lg-brand">
+                <div class="lg-brand-top">
+                    <div class="lg-logo"><img src="https://smt-tel-manager.netlify.app/smt.png" alt="" draggable="false"></div>
+                    <div>
+                        <div class="lg-brand-name">אסיפת הורים</div>
+                        <div class="lg-brand-sub">מערכת לניהול אסיפות הורים במוסדות</div>
+                    </div>
+                </div>
+                <ul class="lg-features">
+                    <li><i class="fas fa-user-graduate"></i><span>תלמידים, כיתות ומלמדים — כולל ייבוא מאקסל</span></li>
+                    <li><i class="fas fa-calendar-alt"></i><span>אסיפות עם שעות ואורכי פגישה לכל כיתה</span></li>
+                    <li><i class="fas fa-phone-alt"></i><span>קביעת תורים בטלפון (בקרוב)</span></li>
+                </ul>
+                <div class="lg-brand-foot">פותח ע"י שימי טרייטל</div>
+            </aside>
 
-    <script src="/asifa/client-app.js?v=1"></script>
-    <script src="/asifa/client-login.js?v=1"></script>
-    <script src="/asifa/client-dashboard.js?v=1"></script>
-    <script src="/asifa/client-meetings.js?v=1"></script>
-    <script src="/asifa/client-board.js?v=1"></script>
-    <script src="/asifa/client-students.js?v=1"></script>
-    <script src="/asifa/client-classes.js?v=1"></script>
-    <script src="/asifa/client-print.js?v=1"></script>
-    <script src="/asifa/client-settings.js?v=1"></script>
-    <script src="/asifa/client-admin.js?v=1"></script>
-    <script>App.start();</script>
+            <section class="lg-form">
+                <div class="lg-mobile-logo"><img src="https://smt-tel-manager.netlify.app/smt.png" alt="" draggable="false"></div>
+                <h1 id="lgTitle">כניסה למערכת</h1>
+                <p id="authMessage" class="lg-status"><i class="fas fa-spinner fa-spin"></i>בודק הרשאת גישה...</p>
+
+                <form id="loginForm" autocomplete="on">
+                    <label class="lg-label" for="usernameInput">שם משתמש</label>
+                    <div class="lg-field">
+                        <i class="fas fa-user lg-field-ico"></i>
+                        <input type="text" id="usernameInput" class="lg-input" autocomplete="username" spellcheck="false" dir="ltr" disabled>
+                    </div>
+                    <label class="lg-label" for="passwordInput">סיסמה</label>
+                    <div class="lg-field">
+                        <i class="fas fa-lock lg-field-ico"></i>
+                        <input type="password" id="passwordInput" class="lg-input" autocomplete="current-password" spellcheck="false" dir="ltr" disabled>
+                        <button type="button" class="lg-eye" id="lgEye" aria-label="הצגת סיסמה" tabindex="-1"><i class="fas fa-eye"></i></button>
+                    </div>
+                    <div class="lg-caps hidden" id="lgCaps"><i class="fas fa-arrow-alt-circle-up"></i> Caps Lock פעיל</div>
+                    <button id="loginBtn" class="lg-btn" type="submit" disabled><span>מאמת נתונים...</span></button>
+                </form>
+
+                <div id="loginError" class="lg-error hidden" role="alert"><i class="fas fa-exclamation-circle"></i> <span id="loginErrorText"></span></div>
+                <div class="lg-secure"><i class="fas fa-shield-alt"></i> החיבור מאובטח · כל ניסיון כניסה נרשם במערכת</div>
+            </section>
+        </div>
+    </div>
+
+    <div class="app-container hidden" id="mainContainer">
+        <aside class="sidebar">
+            <div class="site-title">
+                <h2>אסיפת הורים</h2>
+                <div class="site-sub" id="tenantName"></div>
+            </div>
+            <nav class="menu" id="menu"></nav>
+        </aside>
+
+        <main class="main-content">
+            <header class="topbar">
+                <h1 id="pageTitle"></h1>
+                <div id="topbar-info" class="topbar-info-container"></div>
+            </header>
+            <div class="content-area"><div id="view" class="view-section"></div></div>
+        </main>
+    </div>
+
+    <script type="module" src="/asifa/client-app.js"></script>
 </body>
 </html>

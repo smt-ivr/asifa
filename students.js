@@ -1,185 +1,181 @@
 // ============================================================
-//  students.js — תלמידים וטלפוני הורים, כולל ייבוא מאקסל (הדבקה)
+//  students.js — תלמידים וטלפונים (בטבלאות של המוסד)
+//  GET    /students?class_id=           כל התלמידים עם הטלפונים
+//  POST   /students                     { first_name, last_name, class_id, id_number, father_name, phones: [{ label, phone }] }
+//  PUT    /students/:id                 אותו גוף (שדות שלא נשלחו לא משתנים)
+//  DELETE /students/:id
+//  POST   /students/delete              { ids: [...] }  מחיקה מרובה
+//  POST   /students/import              { rows: [{ first_name, last_name, class_name, id_number, father_name, phones: [{label, phone}] }] }
+//         תלמיד קיים (לפי ת.ז, או שם+משפחה+כיתה) מתעדכן; כיתה שאינה קיימת נוצרת.
 // ============================================================
-import { readJson, str, int, badRequest, notFound, conflict } from './http.js';
-import { requireAdmin, requireTenant, classScope } from './auth.js';
-import { stamp } from './time.js';
-import { normalizePhone, validPhone } from './phones.js';
+import { readJson, str, int, badRequest, notFound } from './http.js';
+import { requireTenant } from './auth.js';
+import { getLocalTime } from './time.js';
+import { tables } from './tenant_schema.js';
 import { classIdByName } from './classes.js';
 
-const validCode = c => /^\d{1,8}$/.test(c);
+const MAX_PHONES = 8;
+
+// "+972-52-123 4567" / "52-1234567" -> "0521234567"
+export function normalizePhone(p) {
+    let d = String(p || '').replace(/\D/g, '');
+    if (d.startsWith('972')) d = '0' + d.slice(3);
+    if (d && !d.startsWith('0') && (d.length === 9 || d.length === 8)) d = '0' + d;
+    return d;
+}
+const validPhone = p => /^0\d{8,9}$/.test(p);
+
+function cleanPhones(list) {
+    const out = [];
+    for (const item of Array.isArray(list) ? list : []) {
+        const phone = normalizePhone(typeof item === 'object' ? item.phone : item);
+        if (!phone) continue;
+        if (!validPhone(phone)) throw badRequest(`מספר טלפון לא תקין: ${typeof item === 'object' ? item.phone : item}`, 'bad_phone');
+        if (out.some(x => x.phone === phone)) continue;
+        out.push({ phone, label: typeof item === 'object' ? (str(item.label, 40) || null) : null });
+    }
+    return out.slice(0, MAX_PHONES);
+}
+
+const cleanId = v => str(v, 12).replace(/\D/g, '') || null;
+
+async function withPhones(env, t, rows) {
+    if (!rows.length) return [];
+    const { results } = await env.DB.prepare(`SELECT student_id, phone, label FROM ${t.phones} ORDER BY student_id, sort_order, id`).all();
+    const map = new Map();
+    for (const p of results) {
+        if (!map.has(p.student_id)) map.set(p.student_id, []);
+        map.get(p.student_id).push({ phone: p.phone, label: p.label });
+    }
+    return rows.map(r => ({ ...r, phones: map.get(r.id) || [] }));
+}
 
 export async function listStudents(env, ctx, url) {
     requireTenant(ctx);
-    const scope = classScope(ctx);
-    const classId = scope || int(url.searchParams.get('class_id'));
-    const params = [ctx.tenantId];
-    let where = 's.tenant_id = ?';
-    if (classId) { where += ' AND s.class_id = ?'; params.push(classId); }
-    const { results } = await env.DB.prepare(`SELECT s.*, c.name class_name,
-            (SELECT group_concat(phone, ',') FROM student_phones p WHERE p.student_id = s.id) phones
-        FROM students s LEFT JOIN classes c ON c.id = s.class_id
-        WHERE ${where} ORDER BY c.sort_order, c.name, s.last_name, s.first_name`).bind(...params).all();
-    return results.map(r => ({ ...r, phones: r.phones ? r.phones.split(',') : [] }));
+    const t = tables(ctx.tenant.id);
+    const classId = int(url.searchParams.get('class_id'));
+    const { results } = await env.DB.prepare(`SELECT s.*, c.name class_name, c.teacher_name FROM ${t.students} s
+        LEFT JOIN ${t.classes} c ON c.id = s.class_id ${classId ? 'WHERE s.class_id = ?' : ''}
+        ORDER BY c.sort_order, c.name, s.last_name, s.first_name`).bind(...(classId ? [classId] : [])).all();
+    return withPhones(env, t, results);
 }
 
-async function nextCode(env, tenantId) {
-    const r = await env.DB.prepare("SELECT MAX(CAST(code AS INTEGER)) m FROM students WHERE tenant_id = ? AND code GLOB '[0-9]*'").bind(tenantId).first();
-    return String(Math.max(100, r.m || 0) + 1);
+async function getOne(env, t, id) {
+    const s = await env.DB.prepare(`SELECT s.*, c.name class_name, c.teacher_name FROM ${t.students} s LEFT JOIN ${t.classes} c ON c.id = s.class_id WHERE s.id = ?`).bind(id).first();
+    if (!s) throw notFound('התלמיד לא נמצא');
+    const { results } = await env.DB.prepare(`SELECT phone, label FROM ${t.phones} WHERE student_id = ? ORDER BY sort_order, id`).bind(id).all();
+    return { ...s, phones: results };
 }
 
-function cleanPhones(list) {
-    const arr = (Array.isArray(list) ? list : String(list || '').split(/[\s,;]+/)).map(normalizePhone).filter(Boolean);
-    const bad = arr.find(p => !validPhone(p));
-    if (bad) throw badRequest(`מספר טלפון לא תקין: ${bad}`, 'bad_phone');
-    return [...new Set(arr)].slice(0, 6);
-}
+const phoneStatements = (env, t, studentId, phones) => [
+    env.DB.prepare(`DELETE FROM ${t.phones} WHERE student_id = ?`).bind(studentId),
+    ...phones.map((p, i) => env.DB.prepare(`INSERT INTO ${t.phones} (student_id, phone, label, sort_order) VALUES (?, ?, ?, ?)`).bind(studentId, p.phone, p.label, i))
+];
 
-async function checkClass(env, ctx, classId) {
+async function checkClass(env, t, classId) {
     if (!classId) return null;
-    const c = await env.DB.prepare('SELECT id FROM classes WHERE id = ? AND tenant_id = ?').bind(classId, ctx.tenantId).first();
-    if (!c) throw badRequest('הכיתה לא נמצאה');
+    if (!await env.DB.prepare(`SELECT id FROM ${t.classes} WHERE id = ?`).bind(classId).first()) throw badRequest('הכיתה לא נמצאה');
     return classId;
 }
 
-async function getOne(env, ctx, id) {
-    const s = await env.DB.prepare(`SELECT s.*, c.name class_name, (SELECT group_concat(phone, ',') FROM student_phones p WHERE p.student_id = s.id) phones
-        FROM students s LEFT JOIN classes c ON c.id = s.class_id WHERE s.id = ? AND s.tenant_id = ?`).bind(id, ctx.tenantId).first();
-    if (!s) throw notFound('התלמיד לא נמצא');
-    return { ...s, phones: s.phones ? s.phones.split(',') : [] };
-}
-
-function phoneStatements(env, ctx, studentId, phones) {
-    const now = stamp();
-    return [
-        env.DB.prepare('DELETE FROM student_phones WHERE student_id = ?').bind(studentId),
-        ...phones.map(p => env.DB.prepare('INSERT INTO student_phones (tenant_id, student_id, phone, source, created_at) VALUES (?, ?, ?, ?, ?)')
-            .bind(ctx.tenantId, studentId, p, 'web', now))
-    ];
-}
-
 export async function createStudent(request, env, ctx) {
-    requireAdmin(ctx);
-    const body = await readJson(request);
-    const first = str(body.first_name, 60);
-    if (!first) throw badRequest('חסר שם פרטי');
-    let code = str(body.code, 8) || await nextCode(env, ctx.tenantId);
-    if (!validCode(code)) throw badRequest('קוד תלמיד חייב להכיל ספרות בלבד (עד 8)');
-    if (await env.DB.prepare('SELECT id FROM students WHERE tenant_id = ? AND code = ?').bind(ctx.tenantId, code).first()) throw conflict(`הקוד ${code} כבר בשימוש`, 'code_taken');
-    const phones = cleanPhones(body.phones);
-    const classId = await checkClass(env, ctx, int(body.class_id));
-    const r = await env.DB.prepare(`INSERT INTO students (tenant_id, class_id, code, first_name, last_name, father_name, active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, 1, ?)`).bind(ctx.tenantId, classId, code, first, str(body.last_name, 60), str(body.father_name, 60) || null, stamp()).run();
-    const id = r.meta.last_row_id;
-    await env.DB.batch(phoneStatements(env, ctx, id, phones));
-    return getOne(env, ctx, id);
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
+    const b = await readJson(request);
+    const first = str(b.first_name, 60);
+    if (!first) throw badRequest('יש להזין שם פרטי');
+    const phones = cleanPhones(b.phones);
+    const classId = await checkClass(env, t, int(b.class_id));
+    const now = getLocalTime();
+    const r = await env.DB.prepare(`INSERT INTO ${t.students} (first_name, last_name, class_id, id_number, father_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(first, str(b.last_name, 60), classId, cleanId(b.id_number), str(b.father_name, 60) || null, now, now).run();
+    await env.DB.batch(phoneStatements(env, t, r.meta.last_row_id, phones));
+    return getOne(env, t, r.meta.last_row_id);
 }
 
 export async function updateStudent(request, env, ctx, id) {
-    requireAdmin(ctx);
-    const s = await getOne(env, ctx, id);
-    const body = await readJson(request);
-    const code = body.code !== undefined ? str(body.code, 8) : s.code;
-    if (!validCode(code)) throw badRequest('קוד תלמיד חייב להכיל ספרות בלבד (עד 8)');
-    if (code !== s.code && await env.DB.prepare('SELECT id FROM students WHERE tenant_id = ? AND code = ?').bind(ctx.tenantId, code).first()) throw conflict(`הקוד ${code} כבר בשימוש`, 'code_taken');
-    const first = body.first_name !== undefined ? str(body.first_name, 60) : s.first_name;
-    if (!first) throw badRequest('חסר שם פרטי');
-    const classId = body.class_id !== undefined ? await checkClass(env, ctx, int(body.class_id)) : s.class_id;
-    const stmts = [env.DB.prepare('UPDATE students SET code = ?, first_name = ?, last_name = ?, father_name = ?, class_id = ?, active = ? WHERE id = ?')
-        .bind(code, first, body.last_name !== undefined ? str(body.last_name, 60) : s.last_name,
-            body.father_name !== undefined ? (str(body.father_name, 60) || null) : s.father_name, classId,
-            body.active !== undefined ? (body.active ? 1 : 0) : s.active, id)];
-    if (body.phones !== undefined) stmts.push(...phoneStatements(env, ctx, id, cleanPhones(body.phones)));
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
+    const s = await getOne(env, t, id);
+    const b = await readJson(request);
+    const first = b.first_name !== undefined ? str(b.first_name, 60) : s.first_name;
+    if (!first) throw badRequest('יש להזין שם פרטי');
+    const stmts = [env.DB.prepare(`UPDATE ${t.students} SET first_name = ?, last_name = ?, class_id = ?, id_number = ?, father_name = ?, updated_at = ? WHERE id = ?`)
+        .bind(first, b.last_name !== undefined ? str(b.last_name, 60) : s.last_name,
+            b.class_id !== undefined ? await checkClass(env, t, int(b.class_id)) : s.class_id,
+            b.id_number !== undefined ? cleanId(b.id_number) : s.id_number,
+            b.father_name !== undefined ? (str(b.father_name, 60) || null) : s.father_name, getLocalTime(), id)];
+    if (b.phones !== undefined) stmts.push(...phoneStatements(env, t, id, cleanPhones(b.phones)));
     await env.DB.batch(stmts);
-    return getOne(env, ctx, id);
+    return getOne(env, t, id);
 }
 
 export async function deleteStudent(env, ctx, id) {
-    requireAdmin(ctx);
-    await getOne(env, ctx, id);
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
+    await getOne(env, t, id);
     await env.DB.batch([
-        env.DB.prepare('DELETE FROM booking_slots WHERE booking_id IN (SELECT id FROM bookings WHERE student_id = ?)').bind(id),
-        env.DB.prepare('DELETE FROM bookings WHERE student_id = ?').bind(id),
-        env.DB.prepare('DELETE FROM absences WHERE student_id = ?').bind(id),
-        env.DB.prepare('DELETE FROM student_phones WHERE student_id = ?').bind(id),
-        env.DB.prepare('DELETE FROM students WHERE id = ? AND tenant_id = ?').bind(id, ctx.tenantId)
+        env.DB.prepare(`DELETE FROM ${t.phones} WHERE student_id = ?`).bind(id),
+        env.DB.prepare(`DELETE FROM ${t.students} WHERE id = ?`).bind(id)
     ]);
-    return { deleted: true };
+    return { deleted: 1 };
 }
 
-// ייבוא: rows = [{ code, first_name, last_name, father_name, class_name, phones }]
-// קוד קיים -> עדכון; טלפונים מתווספים (לא נמחקים) אלא אם replace_phones
+export async function deleteStudents(request, env, ctx) {
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
+    const ids = ((await readJson(request)).ids || []).map(int).filter(Boolean).slice(0, 5000);
+    if (!ids.length) throw badRequest('לא נבחרו תלמידים');
+    const stmts = [];
+    for (let i = 0; i < ids.length; i += 90) {
+        const part = ids.slice(i, i + 90), q = part.map(() => '?').join(',');
+        stmts.push(env.DB.prepare(`DELETE FROM ${t.phones} WHERE student_id IN (${q})`).bind(...part));
+        stmts.push(env.DB.prepare(`DELETE FROM ${t.students} WHERE id IN (${q})`).bind(...part));
+    }
+    await env.DB.batch(stmts);
+    return { deleted: ids.length };
+}
+
 export async function importStudents(request, env, ctx) {
-    requireAdmin(ctx);
+    requireTenant(ctx);
+    const t = tables(ctx.tenant.id);
     const body = await readJson(request);
-    const rows = Array.isArray(body.rows) ? body.rows.slice(0, 3000) : [];
+    const rows = Array.isArray(body.rows) ? body.rows.slice(0, 5000) : [];
     if (!rows.length) throw badRequest('לא נמצאו שורות לייבוא');
-    const classCache = new Map();
-    const now = stamp();
-    const result = { created: 0, updated: 0, phones: 0, errors: [] };
-    let code = null;
+    const cache = new Map();
+    const now = getLocalTime();
+    const out = { created: 0, updated: 0, classes_created: 0, errors: [] };
+    const before = (await env.DB.prepare(`SELECT COUNT(*) n FROM ${t.classes}`).first()).n;
 
     for (let i = 0; i < rows.length; i++) {
         const row = rows[i] || {};
-        const line = i + 1;
         try {
             const first = str(row.first_name, 60);
             if (!first) throw new Error('חסר שם פרטי');
-            let phones = [];
-            try { phones = cleanPhones(row.phones); } catch (e) { throw new Error(e.message); }
-            const classId = await classIdByName(env, ctx.tenantId, row.class_name, classCache);
-            let c = str(row.code, 8);
-            if (c && !validCode(c)) throw new Error('קוד תלמיד חייב להכיל ספרות בלבד');
-            let existing = c ? await env.DB.prepare('SELECT id FROM students WHERE tenant_id = ? AND code = ?').bind(ctx.tenantId, c).first() : null;
+            const last = str(row.last_name, 60);
+            const phones = cleanPhones(row.phones);
+            const classId = await classIdByName(env, ctx.tenant.id, row.class_name, cache);
+            const idNumber = cleanId(row.id_number);
+            let existing = idNumber ? await env.DB.prepare(`SELECT id FROM ${t.students} WHERE id_number = ?`).bind(idNumber).first() : null;
+            if (!existing) existing = await env.DB.prepare(`SELECT id FROM ${t.students} WHERE first_name = ? AND last_name = ? AND class_id IS ?`).bind(first, last, classId).first();
             let id;
             if (existing) {
                 id = existing.id;
-                await env.DB.prepare(`UPDATE students SET first_name = ?, last_name = ?, father_name = COALESCE(?, father_name),
-                    class_id = COALESCE(?, class_id), active = 1 WHERE id = ?`)
-                    .bind(first, str(row.last_name, 60), str(row.father_name, 60) || null, classId, id).run();
-                result.updated++;
+                await env.DB.prepare(`UPDATE ${t.students} SET first_name = ?, last_name = ?, class_id = COALESCE(?, class_id), id_number = COALESCE(?, id_number),
+                    father_name = COALESCE(?, father_name), updated_at = ? WHERE id = ?`)
+                    .bind(first, last, classId, idNumber, str(row.father_name, 60) || null, now, id).run();
+                out.updated++;
             } else {
-                if (!c) {
-                    code = code ? String(+code + 1) : await nextCode(env, ctx.tenantId);
-                    c = code;
-                }
-                const r = await env.DB.prepare(`INSERT INTO students (tenant_id, class_id, code, first_name, last_name, father_name, active, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?)`).bind(ctx.tenantId, classId, c, first, str(row.last_name, 60), str(row.father_name, 60) || null, now).run();
+                const r = await env.DB.prepare(`INSERT INTO ${t.students} (first_name, last_name, class_id, id_number, father_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+                    .bind(first, last, classId, idNumber, str(row.father_name, 60) || null, now, now).run();
                 id = r.meta.last_row_id;
-                result.created++;
+                out.created++;
             }
-            const stmts = [];
-            if (body.replace_phones) stmts.push(env.DB.prepare('DELETE FROM student_phones WHERE student_id = ?').bind(id));
-            for (const p of phones) stmts.push(env.DB.prepare('INSERT OR IGNORE INTO student_phones (tenant_id, student_id, phone, source, created_at) VALUES (?, ?, ?, ?, ?)')
-                .bind(ctx.tenantId, id, p, 'import', now));
-            if (stmts.length) await env.DB.batch(stmts);
-            result.phones += phones.length;
+            if (phones.length) await env.DB.batch(phoneStatements(env, t, id, phones));
         } catch (e) {
-            result.errors.push({ line, message: e.message });
+            out.errors.push({ row: i + 1, message: e.message });
         }
     }
-    return result;
-}
-
-// ---------- לשימוש הקו הטלפוני ----------
-export async function familyByPhone(env, tenantId, phone) {
-    const { results } = await env.DB.prepare(`SELECT DISTINCT s.*, c.name class_name, c.teacher_name
-        FROM student_phones p JOIN students s ON s.id = p.student_id LEFT JOIN classes c ON c.id = s.class_id
-        WHERE p.tenant_id = ? AND p.phone = ? AND s.active = 1 ORDER BY c.sort_order, s.first_name`).bind(tenantId, phone).all();
-    return results;
-}
-
-export async function studentByCode(env, tenantId, code) {
-    return env.DB.prepare(`SELECT s.*, c.name class_name, c.teacher_name FROM students s LEFT JOIN classes c ON c.id = s.class_id
-        WHERE s.tenant_id = ? AND s.code = ? AND s.active = 1`).bind(tenantId, String(code)).first();
-}
-
-export async function studentById(env, tenantId, id) {
-    return env.DB.prepare(`SELECT s.*, c.name class_name, c.teacher_name FROM students s LEFT JOIN classes c ON c.id = s.class_id
-        WHERE s.tenant_id = ? AND s.id = ? AND s.active = 1`).bind(tenantId, id).first();
-}
-
-export async function linkPhone(env, tenantId, studentId, phone) {
-    await env.DB.prepare('INSERT OR IGNORE INTO student_phones (tenant_id, student_id, phone, source, created_at) VALUES (?, ?, ?, ?, ?)')
-        .bind(tenantId, studentId, phone, 'phone', stamp()).run();
+    out.classes_created = (await env.DB.prepare(`SELECT COUNT(*) n FROM ${t.classes}`).first()).n - before;
+    return out;
 }

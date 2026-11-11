@@ -1,0 +1,90 @@
+/* ============================================================
+   mobile.css — התאמה לטלפון בלבד
+   נטען מ-index.html עם media="(max-width: 768px)", כך שאין לו שום השפעה על המחשב.
+   ============================================================ */
+
+/* הגלילה עוברת לעמוד עצמו, כדי שהתפריט העליון יוכל להיות דביק */
+html, body { overflow-x: hidden; }
+.app-container { overflow: visible !important; }
+
+/* ---------- סרגל עליון קומפקטי במקום תפריט הצד ---------- */
+.sidebar {
+    position: sticky; top: 0; z-index: 900;
+    flex-direction: column; align-items: stretch !important;
+    padding: 0 !important; gap: 0 !important;
+    background: rgba(255, 255, 255, .96);
+    backdrop-filter: saturate(1.4) blur(10px); -webkit-backdrop-filter: saturate(1.4) blur(10px);
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: 0 4px 14px rgba(15, 23, 42, .06);
+}
+.site-title { padding: 10px 16px 6px !important; text-align: right; }
+.site-title h2 { font-size: 1.05rem; }
+
+.menu {
+    flex-direction: row !important; flex-wrap: nowrap !important; justify-content: flex-start !important;
+    gap: 6px; overflow-x: auto; overflow-y: hidden;
+    padding: 4px 12px 10px; width: 100%;
+    scrollbar-width: none; -webkit-overflow-scrolling: touch; scroll-snap-type: x proximity;
+}
+.menu::-webkit-scrollbar { display: none; }
+.menu-item {
+    flex: none; scroll-snap-align: start;
+    padding: 7px 13px !important; border-radius: 99px;
+    border: 1px solid var(--border-color) !important;
+    background: #fff; font-size: .84rem; white-space: nowrap;
+}
+.menu-item i { margin-left: 6px; font-size: .9rem; width: auto; }
+.menu-item.active, .menu-item:hover {
+    background: var(--primary-color); color: #fff;
+    border-color: var(--primary-color) !important;
+}
+.menu-item.active i, .menu-item:hover i { color: #fff; }
+.menu > div[style*="flex"] { display: none; }        /* המרווח שדוחף את התחתית בתפריט הצד */
+.sidebar-footer { display: none !important; }
+.menu-item.logout-btn { color: var(--danger); border-color: #fecaca !important; }
+.menu-item.logout-btn i { color: var(--danger); }
+.menu-item.logout-btn:hover { background: #fef2f2; color: var(--danger); border-color: #fecaca !important; }
+.menu-item.logout-btn:hover i { color: var(--danger); }
+
+/* ---------- כותרת עליונה ---------- */
+.main-content { height: auto !important; overflow: visible !important; }
+.topbar { padding: 8px 14px !important; gap: 6px !important; }
+.topbar h1 { display: none; }                         /* כפול לשם האתר שבסרגל */
+.topbar-info-container { flex-wrap: wrap; gap: 6px; }
+.topbar-badge { font-size: .75rem; padding: 3px 9px; }
+
+/* ---------- תוכן ---------- */
+.content-area { padding: 10px !important; }
+.view-section { height: auto !important; }
+.card { padding: 12px !important; }
+
+/* שדות קלט בגודל 16px — מונע זום אוטומטי באייפון בעת הקלדה */
+input:not([type="checkbox"]):not([type="radio"]), select, textarea { font-size: 16px !important; }
+
+/* טבלאות רחבות נגללות לרוחב בתוך עצמן במקום לשבור את העמוד */
+.content-area table { max-width: 100%; }
+
+/* חלונות קופצים כמעט במסך מלא */
+.modal-content { width: 96% !important; max-height: 92vh; }
+#customModalOverlay .modal-content { width: calc(100% - 32px) !important; }
+
+/* טוסטים מעל הסרגל הדביק */
+#ntfStack { top: 10px; z-index: 10050; }
+
+/* ---------- אסיפה ---------- */
+.page-head { flex-direction: column; align-items: stretch !important; }
+.toolbar { flex-direction: column; align-items: stretch !important; }
+.toolbar > * { width: 100% !important; }
+.grid-2, .grid-3, .grid-4, .form-grid { grid-template-columns: 1fr !important; }
+.stats-row { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.class-row { grid-template-columns: 1fr !important; }
+
+/* מבנה עמודה: תפריט למעלה, תוכן מתחת */
+.app-container { flex-direction: column; height: auto !important; }
+.sidebar { width: 100% !important; height: auto !important; border-left: 0 !important; }
+.menu { align-items: center; height: auto; flex: none !important; }
+.menu-item { height: auto; }
+.content-area { overflow: visible !important; }
+.topbar { flex-wrap: wrap; }
+.search-box { min-width: 0; }
+.class-row.head { display: none; }
