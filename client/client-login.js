@@ -1,8 +1,7 @@
 // ============================================================
 //  client-login.js — מסך הכניסה
-//  1. יש טוקן שמור -> בודק אותו (/auth/me)
-//  2. אין -> בודק אם כתובת ה-IP מורשית (כניסה אוטומטית)
-//  3. אחרת -> שם משתמש וסיסמה
+//  הטופס פתוח מיד. ברקע: טוקן שמור (/auth/me), ואם אין — בדיקת IP מורשית.
+//  כניסה אוטומטית לפי IP קורית רק אם המשתמש עוד לא התחיל להקליד.
 // ============================================================
 
 const API = '/asifa/api';
@@ -12,10 +11,20 @@ export function clearSession() {
     try { localStorage.removeItem(TOKEN_KEY); } catch (e) { /* ignore */ }
 }
 
-async function call(method, path, body, token) {
+// timeoutMs — הבדיקות ברקע לא נתקעות לעולם
+async function call(method, path, body, token, timeoutMs = 15000) {
     const headers = { 'Content-Type': 'application/json' };
     if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    let res;
+    try {
+        res = await fetch(API + path, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: ctrl.signal });
+    } catch (e) {
+        throw new Error(e.name === 'AbortError' ? 'השרת לא ענה בזמן, נסו שוב' : 'אין חיבור לשרת');
+    } finally {
+        clearTimeout(timer);
+    }
     const data = await res.json().catch(() => null);
     if (!data || !data.ok) {
         const e = new Error(data && data.error ? data.error.message : 'אין חיבור לשרת');
@@ -47,31 +56,35 @@ export async function setupLogin(onSuccess) {
     pass.addEventListener('keydown', caps);
     pass.addEventListener('keyup', caps);
 
-    // 1. טוקן שמור
-    let token = null;
-    try { token = localStorage.getItem(TOKEN_KEY); } catch (e) { /* ignore */ }
-    if (token) {
+    // הטופס פתוח מיד — לא מחכים לשום בדיקה
+    let done = false;
+    const finish = u => { if (done) return; done = true; onSuccess(u); };
+    enableForm('הזינו שם משתמש וסיסמה');
+
+    // ברקע: טוקן שמור, ואם אין — בדיקת כתובת IP מורשית (נכנסים אוטומטית רק אם עוד לא התחילו להקליד)
+    const typing = () => user.value.trim() || pass.value || !btn.querySelector('.fa-arrow-left');
+    (async () => {
+        let token = null;
+        try { token = localStorage.getItem(TOKEN_KEY); } catch (e) { /* ignore */ }
+        if (token) {
+            msg.innerHTML = '<i class="fas fa-spinner fa-spin"></i>מתחבר...';
+            try {
+                return finish(await call('GET', '/auth/me', null, token, 8000));
+            } catch (e) {
+                if (e.status === 401) clearSession();
+                msg.innerHTML = '<i class="fas fa-lock"></i>הזינו שם משתמש וסיסמה';
+            }
+        }
         try {
-            return onSuccess(await call('GET', '/auth/me', null, token));
-        } catch (e) {
-            if (e.status !== 401) return enableForm('אין חיבור לשרת. נסו לרענן את הדף');
-            clearSession();
-        }
-    }
+            const r = await call('POST', '/auth/login', {}, null, 8000);
+            if (r.authorized && !typing()) {
+                localStorage.setItem(TOKEN_KEY, r.token);
+                finish(r.user);
+            }
+        } catch (e) { /* הבדיקה האוטומטית לא חוסמת את הטופס */ }
+    })();
 
-    // 2. כניסה אוטומטית לפי IP
-    try {
-        const r = await call('POST', '/auth/login', {});
-        if (r.authorized) {
-            localStorage.setItem(TOKEN_KEY, r.token);
-            return onSuccess(r.user);
-        }
-        enableForm('הזינו שם משתמש וסיסמה');
-    } catch (e) {
-        enableForm(e.message);
-    }
-
-    // 3. שם משתמש וסיסמה
+    // כניסה בשם משתמש וסיסמה
     $('loginForm').onsubmit = async e => {
         e.preventDefault();
         $('loginError').classList.add('hidden');
@@ -81,7 +94,7 @@ export async function setupLogin(onSuccess) {
         try {
             const r = await call('POST', '/auth/login', { username: user.value.trim(), password: pass.value });
             localStorage.setItem(TOKEN_KEY, r.token);
-            onSuccess(r.user);
+            finish(r.user);
         } catch (er) {
             showError(er.message);
             btn.disabled = false;
