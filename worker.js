@@ -18,7 +18,7 @@ import clientPrintJs from './client/client-print.js';
 import clientSettingsJs from './client/client-settings.js';
 import clientAdminJs from './client/client-admin.js';
 
-import { CORS, json, errorResponse, notFound } from './http.js';
+import { CORS, json, errorResponse, notFound, ApiError } from './http.js';
 import { ensureSchema } from './migrate.js';
 import { login, logout, authenticate, me, changePassword } from './auth.js';
 import { listTenants, createTenant, updateTenant } from './tenants.js';
@@ -36,6 +36,16 @@ import { runScheduled } from './scheduled.js';
 
 const API_VERSION = '1.0.0';
 const BASE = '/asifa';
+const BACKGROUND_EVERY_MS = 2 * 60 * 1000;
+let lastBackground = 0;
+
+// משימות אוטומטיות "על הדרך" — גיבוי למתזמן החיצוני
+function backgroundJobs(env, ctx) {
+    const now = Date.now();
+    if (now - lastBackground < BACKGROUND_EVERY_MS) return;
+    lastBackground = now;
+    ctx.waitUntil(runScheduled(env).catch(e => console.error('background jobs', e && e.stack || e)));
+}
 
 const STATIC = {
     '/': [indexHtml, 'text/html'],
@@ -132,16 +142,30 @@ async function handleApi(request, env, path, url) {
 }
 
 export default {
-    async fetch(request, env) {
+    async fetch(request, env, ctx) {
         const url = new URL(request.url);
         let path = url.pathname;
         if (path === BASE) return Response.redirect(`${url.origin}${BASE}/`, 301);
         if (!path.startsWith(`${BASE}/`)) return new Response('Not found', { status: 404 });
         path = path.slice(BASE.length);
 
+        if (path === '/api/cron') {
+            try {
+                const key = request.headers.get('X-Cron-Key') || url.searchParams.get('key') || '';
+                if (!env.CRON_KEY || key !== env.CRON_KEY) return errorResponse(new ApiError(403, 'forbidden', 'מפתח שגוי'));
+                await ensureSchema(env);
+                await runScheduled(env);
+                lastBackground = Date.now();
+                return json({ ran: true });
+            } catch (e) {
+                return errorResponse(e);
+            }
+        }
+
         if (path === '/api/yemot' || path === '/api/yemot/') {
             try {
                 await ensureSchema(env);
+                backgroundJobs(env, ctx);
                 return await handleYemotParents(await yemotRequest(request), env);
             } catch (e) {
                 console.error('yemot error', e && e.stack || e);
@@ -152,6 +176,7 @@ export default {
         if (path === '/api' || path.startsWith('/api/')) {
             try {
                 await ensureSchema(env);
+                backgroundJobs(env, ctx);
                 return await handleApi(request, env, path.slice(4), url);
             } catch (e) {
                 return errorResponse(e);
