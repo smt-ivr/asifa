@@ -60,17 +60,22 @@ export async function deleteClass(env, ctx, id) {
     return { deleted: true };
 }
 
-// מזהה כיתה לפי שם; יוצר אותה אם אינה קיימת
+// "כיתה א'" / "כיתה א׳" / "כיתה  א" — אותה כיתה
+export const classKey = name => String(name || '').replace(/["'`׳״]/g, '').replace(/\s+/g, ' ').trim();
+
+// מזהה כיתה לפי שם (בלי להבחין בגרש/רווחים); יוצר אותה אם אינה קיימת
 export async function classIdByName(env, tenantId, name, cache) {
-    const key = str(name, 60);
+    const display = str(name, 60);
+    const key = classKey(display);
     if (!key) return null;
-    if (cache.has(key)) return cache.get(key);
     const t = tables(tenantId);
-    let c = await env.DB.prepare(`SELECT id FROM ${t.classes} WHERE name = ?`).bind(key).first();
-    if (!c) {
-        const r = await env.DB.prepare(`INSERT INTO ${t.classes} (name, sort_order, created_at) VALUES (?, 0, ?)`).bind(key, getLocalTime()).run();
-        c = { id: r.meta.last_row_id };
+    if (!cache.loaded) {
+        const { results } = await env.DB.prepare(`SELECT id, name FROM ${t.classes}`).all();
+        for (const c of results) if (!cache.has(classKey(c.name))) cache.set(classKey(c.name), c.id);
+        cache.loaded = true;
     }
-    cache.set(key, c.id);
-    return c.id;
+    if (cache.has(key)) return cache.get(key);
+    const r = await env.DB.prepare(`INSERT INTO ${t.classes} (name, sort_order, created_at) VALUES (?, 0, ?)`).bind(display, getLocalTime()).run();
+    cache.set(key, r.meta.last_row_id);
+    return r.meta.last_row_id;
 }

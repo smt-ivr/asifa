@@ -5,8 +5,8 @@
 //  PUT    /students/:id                 אותו גוף (שדות שלא נשלחו לא משתנים)
 //  DELETE /students/:id
 //  POST   /students/delete              { ids: [...] }  מחיקה מרובה
-//  POST   /students/import              { rows: [{ first_name, last_name, class_name, id_number, father_name, phones: [{label, phone}] }] }
-//         תלמיד קיים (לפי ת.ז, או שם+משפחה+כיתה) מתעדכן; כיתה שאינה קיימת נוצרת.
+//  POST   /students/import              { rows: [{ first_name, last_name, class_name, teacher_name, id_number, father_name, phones: [{label, phone}] }] }
+//         תלמיד קיים (לפי ת.ז, או שם+משפחה+כיתה) מתעדכן; כיתה שאינה קיימת נוצרת; שם המלמד נשמר בכיתה.
 // ============================================================
 import { readJson, str, int, badRequest, notFound } from './http.js';
 import { requireTenant } from './auth.js';
@@ -143,6 +143,7 @@ export async function importStudents(request, env, ctx) {
     const rows = Array.isArray(body.rows) ? body.rows.slice(0, 5000) : [];
     if (!rows.length) throw badRequest('לא נמצאו שורות לייבוא');
     const cache = new Map();
+    const teachersSet = new Set();   // שם מלמד מעודכן פעם אחת לכל כיתה בייבוא
     const now = getLocalTime();
     const out = { created: 0, updated: 0, classes_created: 0, errors: [] };
     const before = (await env.DB.prepare(`SELECT COUNT(*) n FROM ${t.classes}`).first()).n;
@@ -155,6 +156,11 @@ export async function importStudents(request, env, ctx) {
             const last = str(row.last_name, 60);
             const phones = cleanPhones(row.phones);
             const classId = await classIdByName(env, ctx.tenant.id, row.class_name, cache);
+            const teacher = str(row.teacher_name, 80);
+            if (classId && teacher && !teachersSet.has(classId)) {
+                teachersSet.add(classId);
+                await env.DB.prepare(`UPDATE ${t.classes} SET teacher_name = ? WHERE id = ?`).bind(teacher, classId).run();
+            }
             const idNumber = cleanId(row.id_number);
             let existing = idNumber ? await env.DB.prepare(`SELECT id FROM ${t.students} WHERE id_number = ?`).bind(idNumber).first() : null;
             if (!existing) existing = await env.DB.prepare(`SELECT id FROM ${t.students} WHERE first_name = ? AND last_name = ? AND class_id IS ?`).bind(first, last, classId).first();

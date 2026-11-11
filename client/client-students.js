@@ -5,7 +5,7 @@
 import { get, post, put, del, esc, fullName, phoneFmt, $, $$, modal, confirmDialog, ok, fail, notify, emptyState, go, formData } from './client-app.js';
 
 const PHONE_LABELS = ['אב', 'אם', 'בית', 'סבא', 'סבתא', 'אפוטרופוס'];
-const FIELDS = { ignore: 'לא לייבא', first_name: 'שם פרטי', last_name: 'שם משפחה', full_name: 'שם מלא (פרטי + משפחה)', class_name: 'כיתה', id_number: 'מספר זהות', father_name: 'שם האב', phone: 'טלפון' };
+const FIELDS = { ignore: 'לא לייבא', first_name: 'שם פרטי', last_name: 'שם משפחה', full_name: 'שם מלא (פרטי + משפחה)', class_name: 'כיתה', teacher_name: 'שם המלמד (של הכיתה)', id_number: 'מספר זהות', father_name: 'שם האב', phone: 'טלפון' };
 
 let classesCache = [];
 
@@ -72,6 +72,7 @@ function guessField(header) {
     if (/שם מלא/.test(h)) return 'full_name';
     if (/פרטי|^שם$|^שם התלמיד$|^שם תלמיד$/.test(h)) return 'first_name';
     if (/משפחה/.test(h)) return 'last_name';
+    if (/מלמד|מחנך|מורה|רבי|הרב/.test(h)) return 'teacher_name';
     if (/כיתה|כתה|שיעור/.test(h)) return 'class_name';
     if (/אב|אבא/.test(h)) return 'father_name';
     return 'ignore';
@@ -175,7 +176,7 @@ function openImport(onImported) {
             <details class="import-paste"><summary><i class="fas fa-paste"></i> או הדביקו ישירות מאקסל</summary>
                 <textarea class="input" id="pasteBox" rows="6" placeholder="העתיקו מאקסל את הטבלה כולל שורת הכותרות והדביקו כאן"></textarea>
                 <button class="btn btn-sm btn-secondary" id="pasteGo" style="margin-top:8px"><i class="fas fa-arrow-left"></i> המשך</button></details>
-            <div class="notice" style="margin-top:14px;margin-bottom:0"><i class="fas fa-lightbulb"></i><span>עמודות מומלצות: שם פרטי · שם משפחה · כיתה · מספר זהות · שם האב · ועמודת טלפון לכל מספר (למשל "טלפון אב", "טלפון אם", "טלפון בית"). אחרי בחירת הקובץ תוכלו לבדוק ולתקן מה כל עמודה.</span></div>`,
+            <div class="notice" style="margin-top:14px;margin-bottom:0"><i class="fas fa-lightbulb"></i><span>עמודות מומלצות: שם פרטי · שם משפחה · כיתה · שם המלמד · מספר זהות · שם האב · ועמודת טלפון לכל מספר (למשל "טלפון אב", "טלפון אם", "טלפון בית"). אחרי בחירת הקובץ תוכלו לבדוק ולתקן מה כל עמודה.</span></div>`,
         buttons: [{ label: 'ביטול' }]
     });
     const handle = async file => {
