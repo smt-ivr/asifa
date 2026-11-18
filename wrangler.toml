@@ -12,7 +12,7 @@ fallthrough = true
 [[d1_databases]]
 binding = "DB"
 database_name = "asifa"
-database_id = "22909c66-3a8f-4e47-9f82-7a94c0ede541"
+database_id = "351a72ac-8d2f-4322-90d2-32a09650623f"
 
 # כניסה עם Google (מזהה ציבורי, מורשה לדומיין smti.uk) ושולח המיילים.
 # המפתח של Resend נשמר כסוד בשם RESEND_API_KEY (לא בקובץ הזה).
