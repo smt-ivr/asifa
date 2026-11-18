@@ -21,7 +21,7 @@ import { getLocalTime } from './time.js';
 import { tables, ensureTenantSchema } from './tenant_schema.js';
 import { phoneSettings, normalizeDid } from './phone.js';
 import { normalizePhone } from './students.js';
-import { classSetup, bookingOf, availableStarts, preferredOrder, book, cancelBooking, markAbsent, familyBusy } from './bookings.js';
+import { classSetup, setupFromRow, availableStarts, preferredOrder, book, cancelBooking, markAbsent } from './bookings.js';
 
 const text = body => new Response(body, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
 const TIMEOUT = 10;
@@ -97,28 +97,34 @@ async function log(env, c, action, studentId = null, details = null) {
     } catch (e) { /* היומן לא מפיל שיחה */ }
 }
 
-// ילדי המשפחה שמשתתפים באסיפה, כל אחד עם הגדרות הכיתה, התור וההודעה שלו
+// ילדי המשפחה שמשתתפים באסיפה, כל אחד עם הגדרות הכיתה, הפגישה וההודעה שלו —
+// בשאילתה אחת (במקום שלוש לכל ילד), ונשמר לשאר הבקשה. אחרי כל שינוי: c.fam = null
 async function loadFamily(env, c, extraId) {
-    const t = c.t;
-    const ids = new Set();
-    if (c.phone) {
-        const { results } = await env.DB.prepare(`SELECT DISTINCT student_id FROM ${t.phones} WHERE phone = ?`).bind(c.phone).all();
-        results.forEach(r => ids.add(r.student_id));
-    }
-    if (extraId) ids.add(extraId);
-    if (!ids.size) return [];
-    const { results: kids } = await env.DB.prepare(`SELECT s.*, c.name class_name, c.teacher_name, c.sort_order FROM ${t.students} s
-        LEFT JOIN ${t.classes} c ON c.id = s.class_id WHERE s.id IN (${[...ids].map(() => '?').join(',')}) ORDER BY c.sort_order, c.name, s.first_name`).bind(...ids).all();
-    const out = [];
-    for (const k of kids) {
-        const setup = k.class_id ? await classSetup(env, c.tenant.id, c.meeting.id, k.class_id) : null;
-        if (!setup) continue;
-        const booking = await bookingOf(env, c.tenant.id, c.meeting.id, k.id);
-        const absent = await env.DB.prepare(`SELECT id FROM ${t.absences} WHERE meeting_id = ? AND student_id = ?`).bind(c.meeting.id, k.id).first();
-        out.push({ ...k, setup, booking, absent: !!absent });
-    }
-    return out;
+    if (c.fam && c.fam.key === (extraId || 0)) return c.fam.kids;
+    const t = c.t, m = c.meeting.id;
+    if (!c.phone && !extraId) return [];
+    const { results } = await env.DB.prepare(`SELECT s.*, cl.name class_name, cl.teacher_name, cl.sort_order,
+            mc.start_time, mc.end_time, mc.durations mc_durations,
+            b.id b_id, b.start_min b_start, b.duration b_duration, a.id a_id
+        FROM ${t.students} s
+        JOIN ${t.classes} cl ON cl.id = s.class_id
+        JOIN ${t.meetingClasses} mc ON mc.class_id = s.class_id AND mc.meeting_id = ?1
+        LEFT JOIN ${t.bookings} b ON b.meeting_id = ?1 AND b.student_id = s.id
+        LEFT JOIN ${t.absences} a ON a.meeting_id = ?1 AND a.student_id = s.id
+        WHERE s.id IN (SELECT student_id FROM ${t.phones} WHERE phone = ?2) OR s.id = ?3
+        ORDER BY cl.sort_order, cl.name, s.first_name`).bind(m, c.phone || '-', extraId || 0).all();
+    const kids = results.map(r => ({
+        ...r,
+        setup: setupFromRow(r),
+        booking: r.b_id ? { id: r.b_id, start_min: r.b_start, duration: r.b_duration } : null,
+        absent: !!r.a_id
+    }));
+    c.fam = { key: extraId || 0, kids };
+    return kids;
 }
+
+// תורים של שאר הילדים במשפחה (בלי שאילתה — מתוך מה שכבר נטען)
+const siblingsBusy = (kids, kidId) => kids.filter(k => k.id !== kidId && k.booking).map(k => [k.booking.start_min, k.booking.start_min + k.booking.duration]);
 
 // "כיתה ד׳" -> "כיתה דלת" (אות בודדת עם גרש נקראת כשם האות)
 const LETTERS = { 'א': 'אלף', 'ב': 'בית', 'ג': 'גימל', 'ד': 'דלת', 'ה': 'הא', 'ו': 'וו', 'ז': 'זין', 'ח': 'חית', 'ט': 'טית', 'י': 'יוד', 'יא': 'יוד אלף', 'יב': 'יוד בית', 'יג': 'יוד גימל', 'יד': 'יוד דלת' };
@@ -178,8 +184,8 @@ function startBooking(env, n, c, kid, prefix = []) {
 // after = null: ההצעה המומלצת; אחרת השעה הפנויה הבאה אחרי after (from: כולל after)
 async function offer(env, n, c, kid, duration, after, prefix = [], { from = false } = {}) {
     const kids = await loadFamily(env, c, c.u);
-    const busy = await familyBusy(env, c.tenant.id, c.meeting.id, kids.map(k => k.id), kid.id);
-    const starts = await availableStarts(env, c.tenant.id, c.meeting.id, kid.setup, duration, kid.id, busy);
+    const busy = siblingsBusy(kids, kid.id);
+    const starts = await availableStarts(env, c.tenant.id, c.meeting.id, kid.setup, duration, kid.id, busy, kid.booking);
     if (!starts.length) {
         const other = kid.setup.durations.length > 1 ? ' נסו אורך פגישה אחר' : ' אפשר לעדכן שלא תוכלו להגיע והמלמד ייצור עמכם קשר';
         return mainMenu(n, c, kids, { prefix: [...prefix, `אין יותר שעות פנויות ${teacherOf(kid)} לפגישה של ${speakMinutes(duration)}${other}`] });
@@ -214,6 +220,7 @@ async function studentByIdNumber(env, t, idNumber) {
 }
 
 async function linkPhone(env, t, studentId, phone) {
+    // (המשפחה תיטען מחדש — c.fam מתאפס במקום הקריאה)
     const exists = await env.DB.prepare(`SELECT id FROM ${t.phones} WHERE student_id = ? AND phone = ?`).bind(studentId, phone).first();
     if (!exists) await env.DB.prepare(`INSERT INTO ${t.phones} (student_id, phone, label, sort_order) VALUES (?, ?, 'נשמר בטלפון', 99)`).bind(studentId, phone).run();
 }
@@ -276,6 +283,7 @@ export async function handleYemot(url, env, pathId) {
             if (c.phone && settings.allow_save_phone) {
                 if (step.stage === 'ad') {
                     await linkPhone(env, t, s.id, c.phone);
+                    c.fam = null;
                     await log(env, c, 'link_phone', s.id);
                     c.u = 0;
                     return mainMenu(n, c, await loadFamily(env, c, 0), { withSummary: true, prefix: [`${s.first_name} נוסף בהצלחה`] });
@@ -290,6 +298,7 @@ export async function handleYemot(url, env, pathId) {
         case 'sv': {
             if (v === '1' && c.phone) {
                 await linkPhone(env, t, step.u, c.phone);
+                c.fam = null;
                 await log(env, c, 'link_phone', step.u);
                 c.u = 0;
                 const fam = await loadFamily(env, c, 0);
@@ -353,13 +362,14 @@ export async function handleYemot(url, env, pathId) {
             if (v === '3') return ask(n, 'tm', { u: c.u, s: kid.id, d: duration }, ['הקישו את השעה המבוקשת בארבע ספרות', 'לדוגמה לשעה שבע וחצי בערב הקישו אחת תשע שלוש אפס'], { max: 4 });
             if (v !== '1') return offer(env, n, c, kid, duration, step.x, ['בחירה לא תקינה'], { from: true });
             if (!c.meeting.open) return mainMenu(n, c, kids, { prefix: [settings.locked_text] });
-            const busy = await familyBusy(env, tenant.id, c.meeting.id, kids.map(k => k.id), kid.id);
+            const busy = siblingsBusy(kids, kid.id);
             try {
                 await book(env, tenant.id, { meetingId: c.meeting.id, setup: kid.setup, studentId: kid.id, start: step.x, duration, source: 'phone', phone: c.phone || null, busy });
             } catch (e) {
                 if (e.code === 'slot_taken') return offer(env, n, c, kid, duration, step.x, ['השעה נתפסה הרגע'], { from: true });
                 throw e;
             }
+            c.fam = null;
             await log(env, c, 'book', kid.id, `${Math.floor(step.x / 60)}:${String(step.x % 60).padStart(2, '0')} · ${duration} דק׳`);
             const fresh = await loadFamily(env, c, c.u);
             return afterBooking(n, c, fresh, ['הפגישה נקבעה בהצלחה', `ל${kidLabel(kid)} ${teacherOf(kid)}`, ...dateParts(c.meeting.meeting_date), `בשעה ${speakTime(step.x)}`]);
@@ -393,6 +403,7 @@ export async function handleYemot(url, env, pathId) {
             const kid = kids.find(k => k.id === step.s);
             if (!kid || v !== '1') return mainMenu(n, c, kids);
             await markAbsent(env, tenant.id, c.meeting.id, kid.id, { phone: c.phone || null, source: 'phone' });
+            c.fam = null;
             await log(env, c, 'absent', kid.id);
             return mainMenu(n, c, await loadFamily(env, c, c.u), { prefix: ['העדכון נקלט', 'המלמד ייצור עמכם קשר', c.phone ? '' : 'שימו לב המספר שלכם חסוי ולכן המלמד לא יוכל לחזור אליכם נא לפנות למזכירות'] });
         }
@@ -402,6 +413,7 @@ export async function handleYemot(url, env, pathId) {
             const kid = kids.find(k => k.id === step.s);
             if (!kid || v !== '1' || !c.meeting.open) return mainMenu(n, c, kids);
             await cancelBooking(env, tenant.id, c.meeting.id, kid.id);
+            c.fam = null;
             await log(env, c, 'cancel', kid.id);
             return mainMenu(n, c, await loadFamily(env, c, c.u), { prefix: [`הפגישה של ${kid.first_name} בוטלה`] });
         }

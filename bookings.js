@@ -15,15 +15,19 @@ import { tables } from './tenant_schema.js';
 const gcd = (a, b) => (b ? gcd(b, a % b) : a);
 const parse = s => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch (e) { return []; } };
 
+// הגדרת כיתה מתוך שורה שכבר נשלפה (start_time, end_time, durations / mc_durations)
+export function setupFromRow(r) {
+    const durations = parse(r.mc_durations ?? r.durations).filter(d => d > 0).sort((a, b) => a - b);
+    return { class_id: r.class_id, class_name: r.class_name, teacher_name: r.teacher_name, start: toMinutes(r.start_time), end: toMinutes(r.end_time),
+        durations, step: durations.reduce(gcd, durations[0] || 5) };
+}
+
 // הגדרת כיתה באסיפה: { class_id, start, end, durations, step, class_name, teacher_name }
 export async function classSetup(env, tenantId, meetingId, classId) {
     const t = tables(tenantId);
     const r = await env.DB.prepare(`SELECT mc.*, c.name class_name, c.teacher_name FROM ${t.meetingClasses} mc JOIN ${t.classes} c ON c.id = mc.class_id
         WHERE mc.meeting_id = ? AND mc.class_id = ?`).bind(meetingId, classId).first();
-    if (!r) return null;
-    const durations = parse(r.durations).filter(d => d > 0).sort((a, b) => a - b);
-    return { class_id: r.class_id, class_name: r.class_name, teacher_name: r.teacher_name, start: toMinutes(r.start_time), end: toMinutes(r.end_time),
-        durations, step: durations.reduce(gcd, durations[0] || 5) };
+    return r ? setupFromRow(r) : null;
 }
 
 export async function bookingOf(env, tenantId, meetingId, studentId) {
@@ -40,9 +44,10 @@ export async function familyBusy(env, tenantId, meetingId, familyIds, exceptStud
 }
 
 // כל שעות ההתחלה הפנויות לתור באורך duration, כרונולוגי
-export async function availableStarts(env, tenantId, meetingId, setup, duration, studentId, busy = []) {
+// own: הפגישה הנוכחית של התלמיד אם כבר ידועה (חוסך שאילתה); undefined = לשלוף
+export async function availableStarts(env, tenantId, meetingId, setup, duration, studentId, busy = [], own) {
     const t = tables(tenantId);
-    const own = await bookingOf(env, tenantId, meetingId, studentId);
+    if (own === undefined) own = await bookingOf(env, tenantId, meetingId, studentId);
     const { results } = await env.DB.prepare(`SELECT slot_min, booking_id FROM ${t.slots} WHERE meeting_id = ? AND class_id = ?`).bind(meetingId, setup.class_id).all();
     const taken = new Set(results.filter(r => !own || r.booking_id !== own.id).map(r => r.slot_min));
     const out = [];
